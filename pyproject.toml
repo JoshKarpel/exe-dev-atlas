@@ -1,0 +1,185 @@
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13"]
+build-backend = "uv_build"
+
+[project]
+name = "exe-dev-atlas"
+version = "0.1.0"
+description = "A front door for an exe.dev VM: what is listening, what it is, and what to open."
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "Josh Karpel", email = "josh.karpel@gmail.com" },
+]
+requires-python = ">=3.14"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Web Environment",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    # Linux only, and not incidentally: every listener fact comes from /proc and `ss`.
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+    "Topic :: System :: Networking :: Monitoring",
+    "Typing :: Typed",
+]
+dependencies = [
+    "without-core>=0.0.5",
+    "without-asgi>=0.0.5",
+    "without-web>=0.0.5",
+    "without-http>=0.0.5",
+    "without-html>=0.0.5",
+    "typer>=0.27",
+]
+
+[project.scripts]
+exe-dev-atlas = "exe_dev_atlas.main:main"
+
+[project.urls]
+Source = "https://github.com/JoshKarpel/exe-dev-atlas"
+
+[tool.uv]
+# Skip releases younger than this when resolving, so a compromised publish has a week to be
+# noticed by somebody else before it can reach this machine.
+exclude-newer = "7 days"
+
+# `without` is exempt, because the cooldown is defending against nobody here: it is written by the
+# same person in a sibling repository, released when this needs something from it, and read as a
+# diff rather than trusted as an artifact. Waiting a week for a release cut for us would be the
+# whole friction of a path dependency with none of its convenience. What that gives up is real and
+# worth saying: if the account publishing `without` were compromised, this is the one dependency
+# where nothing would stand between the bad release and the next `uv lock`.
+[tool.uv.exclude-newer-package]
+without-core = false
+without-asgi = false
+without-web = false
+without-http = false
+without-html = false
+
+[dependency-groups]
+dev = [
+    "pytest<10",
+    "pytest-asyncio>=1",
+    "pytest-cov>=3",
+    "pytest-randomly>=3",
+    "pytest-timeout>=2.3",
+    "pytest-xdist>=3",
+    "mypy>=2.3.0",
+    "ruff>=0.15.22",
+    "pre-commit>=4.4",
+]
+
+[tool.pytest.ini_options]
+addopts = [
+    "-q",
+    "-n", "auto",
+    "--dist", "worksteal",
+    "--strict-markers",
+]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+# A per-test timeout so a deadlocked async test fails loudly instead of hanging the suite.
+# `thread` works without signals, so it is xdist-safe. Raise it per-test with
+# `@pytest.mark.timeout(...)` rather than globally.
+timeout = 10
+timeout_method = "thread"
+
+filterwarnings = ["error"]
+
+[tool.mypy]
+pretty = true
+show_error_codes = true
+
+files = ["."]
+
+check_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+disallow_any_generics = true
+
+warn_unused_configs = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+warn_redundant_casts = true
+
+[tool.coverage.run]
+branch = true
+source = ["src"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "A",     # https://docs.astral.sh/ruff/rules/#flake8-builtins-a
+    "ASYNC", # https://docs.astral.sh/ruff/rules/#flake8-async-async
+    "B",     # https://docs.astral.sh/ruff/rules/#flake8-bugbear-b
+    "BLE",   # https://docs.astral.sh/ruff/rules/#flake8-blind-except-ble
+    "C4",    # https://docs.astral.sh/ruff/rules/#flake8-comprehensions-c4
+    "D",     # https://docs.astral.sh/ruff/rules/#pydocstyle-d
+    "DTZ",   # https://docs.astral.sh/ruff/rules/#flake8-datetimez-dtz
+    "E",     # https://docs.astral.sh/ruff/rules/#error-e
+    "F",     # https://docs.astral.sh/ruff/rules/#pyflakes-f
+    "FA",    # https://docs.astral.sh/ruff/rules/#flake8-future-annotations-fa
+    "FLY",   # https://docs.astral.sh/ruff/rules/#flynt-fly
+    "FURB",  # https://docs.astral.sh/ruff/rules/#refurb-furb
+    "G",     # https://docs.astral.sh/ruff/rules/#flake8-logging-format-g
+    "I",     # https://docs.astral.sh/ruff/rules/#isort-i
+    "ICN",   # https://docs.astral.sh/ruff/rules/#flake8-import-conventions-icn
+    "LOG",   # https://docs.astral.sh/ruff/rules/#flake8-logging-log
+    "N",     # https://docs.astral.sh/ruff/rules/#pep8-naming-n
+    "PERF",  # https://docs.astral.sh/ruff/rules/#perflint-perf
+    "PGH",   # https://docs.astral.sh/ruff/rules/#pygrep-hooks-pgh
+    "PIE",   # https://docs.astral.sh/ruff/rules/#flake8-pie-pie
+    "PLC",   # https://docs.astral.sh/ruff/rules/#convention-plc
+    "PLE",   # https://docs.astral.sh/ruff/rules/#error-ple
+    "PLW",   # https://docs.astral.sh/ruff/rules/#warning-plw
+    "PT",    # https://docs.astral.sh/ruff/rules/#flake8-pytest-style-pt
+    "PTH",   # https://docs.astral.sh/ruff/rules/#flake8-use-pathlib-pth
+    "PYI",   # https://docs.astral.sh/ruff/rules/#flake8-pyi-pyi
+    "RET",   # https://docs.astral.sh/ruff/rules/#flake8-return-ret
+    "RSE",   # https://docs.astral.sh/ruff/rules/#flake8-raise-rse
+    "RUF",   # https://docs.astral.sh/ruff/rules/#ruff-specific-rules-ruf
+    "S307",  # https://docs.astral.sh/ruff/rules/suspicious-eval-usage/
+    "SIM",   # https://docs.astral.sh/ruff/rules/#flake8-simplify-sim
+    "SLF",   # https://docs.astral.sh/ruff/rules/#flake8-self-slf
+    "T10",   # https://docs.astral.sh/ruff/rules/#flake8-debugger-t10
+    "T20",   # https://docs.astral.sh/ruff/rules/#flake8-print-t20
+    "TID",   # https://docs.astral.sh/ruff/rules/#flake8-tidy-imports-tid
+    "UP",    # https://docs.astral.sh/ruff/rules/#pyupgrade-up
+    "W",     # https://docs.astral.sh/ruff/rules/#warning-w
+]
+
+ignore = [
+    "E501",  # line length exceeds limit: the formatter owns this
+    "E741",  # ambiguous variable name
+    "T201",  # print: the CLI's whole job is printing
+    "T203",  # pprint
+    "N818",  # exception names are deliberately descriptive, not Error-suffixed
+    "G004",  # logging-f-string: f-strings are the house style for all formatting, including logging calls
+    "D1",    # undocumented-*: docstrings are written where they add value (and never on modules, per house style)
+    "D203",  # incompatible with D211 (no blank line before a class docstring)
+    "D205",  # would force a single-physical-line summary
+    "D212",  # incompatible with D213 (the multi-line summary belongs on the second line)
+    "D401",  # non-imperative-mood: docstrings here are descriptive
+]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "SLF001",   # tests inspect internals deliberately
+    "ASYNC110", # tests poll observed state with sleep loops; no event to await
+    "SIM117",   # nested `with` expresses resource scoping; flattening moves scoped asserts
+]

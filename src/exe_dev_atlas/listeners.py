@@ -1,0 +1,203 @@
+from __future__ import annotations
+
+import os
+import pwd
+import re
+import shutil
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Final
+
+from exe_dev_atlas.processes import run
+
+# The range exe.dev's proxy forwards verbatim. A listener outside it is real but
+# unreachable from outside the VM, so listing it would offer a dead link.
+ROUTED_PORTS: Final = range(3000, 10_000)
+
+CLOCK_TICKS_PER_SECOND: Final = os.sysconf("SC_CLK_TCK")
+
+LISTEN_PID_PATTERN: Final = re.compile(r"pid=(\d+)")
+
+
+@dataclass(frozen=True, slots=True)
+class Listener:
+    """A port with something bound to it, as the kernel describes it."""
+
+    port: int
+    pid: int | None
+    addresses: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Process:
+    """What `/proc` says about the process behind a listener."""
+
+    command_name: str
+    command_line: str
+    directory: str
+    user: str
+    started_at: int | None
+    executable: str
+
+
+NO_PROCESS: Final = Process(
+    command_name="",
+    command_line="",
+    directory="",
+    user="",
+    started_at=None,
+    executable="",
+)
+
+
+class NoSocketStatistics(RuntimeError):
+    """
+    `ss` is not on this machine, so there is no way to learn what is listening.
+
+    Raised at startup rather than discovered once a second forever: the whole program is a
+    view of what `ss` reports, so a box without `iproute2` has nothing to serve and should
+    say so while somebody is still watching the terminal.
+    """
+
+
+def socket_statistics_command() -> str:
+    """The absolute path of `ss`, or a refusal naming what is missing."""
+    found = shutil.which("ss")
+    if found is None:
+        raise NoSocketStatistics("`ss` is not on PATH, so nothing can be discovered; install iproute2")
+    return found
+
+
+def parse_listeners(ss_output: str) -> list[Listener]:
+    """
+    Turn `ss -tlnpH` output into one Listener per routed port.
+
+    A port bound on both IPv4 and IPv6 arrives as two lines and leaves as one row, since it
+    is one service and would be one link.
+    """
+    pids: dict[int, int | None] = {}
+    addresses: dict[int, set[str]] = {}
+    for line in ss_output.splitlines():
+        fields = line.split(maxsplit=5)
+        if len(fields) < 4:
+            continue
+        address, _, port_text = fields[3].rpartition(":")
+        if not port_text.isdigit():
+            continue
+        port = int(port_text)
+        if port not in ROUTED_PORTS:
+            continue
+        pid_match = LISTEN_PID_PATTERN.search(fields[5] if len(fields) > 5 else "")
+        addresses.setdefault(port, set()).add(address.strip("[]"))
+        if pid_match and pids.get(port) is None:
+            pids[port] = int(pid_match.group(1))
+        pids.setdefault(port, None)
+    return [Listener(port=port, pid=pids[port], addresses=tuple(sorted(addresses[port]))) for port in sorted(addresses)]
+
+
+async def read_listeners(command: str) -> list[Listener]:
+    """
+    Every routed port with something bound to it, right now.
+
+    A failure raises rather than yielding an empty listing. An empty listing is a real and
+    ordinary answer (a box with nothing running), so returning one for a broken `ss` would
+    render as "nothing is listening" on a page whose entire job is to say what is.
+    """
+    ran = await run(command, "--tcp", "--listening", "--numeric", "--processes", "--no-header")
+    if not ran.ok:
+        raise NoSocketStatistics(f"`ss` exited {ran.exit_code}: {ran.stderr.strip()}")
+    return parse_listeners(ran.stdout)
+
+
+def read_process(pid: int | None) -> Process:
+    """
+    Everything `/proc` will say about one pid.
+
+    Every field is read independently: a process owned by another user hides its cwd and
+    command line from us but still has a name, and a process that exits mid-scan should cost
+    one blank field rather than the whole row.
+
+    These reads are synchronous inside an async scan on purpose. `/proc` is a virtual
+    filesystem, so each is a microsecond memory formatting call with no device behind it to
+    block on, and there are at most a few dozen per scan; handing each to `asyncio.to_thread`
+    would cost more in dispatch than the reads themselves take.
+    """
+    if pid is None:
+        return NO_PROCESS
+
+    return Process(
+        command_name=_read(pid, "comm").strip(),
+        command_line=" ".join(_read(pid, "cmdline").split("\0")).strip(),
+        directory=_link(pid, "cwd"),
+        user=_owner(pid),
+        started_at=read_start_time(pid),
+        # The binary actually running, which is how a subprocess reaches the *same* program
+        # rather than whatever a PATH lookup in this daemon's environment happens to find.
+        executable=_link(pid, "exe"),
+    )
+
+
+def _entry(pid: int, name: str) -> Path:
+    return Path("/proc") / str(pid) / name
+
+
+def _read(pid: int, name: str) -> str:
+    try:
+        return _entry(pid, name).read_bytes().decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def _link(pid: int, name: str) -> str:
+    try:
+        return str(_entry(pid, name).readlink())
+    except OSError:
+        return ""
+
+
+def _owner(pid: int) -> str:
+    try:
+        return pwd.getpwuid(_entry(pid, "").stat().st_uid).pw_name
+    except OSError, KeyError:
+        return ""
+
+
+def ticks_from_stat(stat: str) -> int | None:
+    """
+    The `starttime` field of `/proc/<pid>/stat`, in clock ticks since boot.
+
+    The `comm` field is parenthesised and may itself contain spaces and parentheses, so the
+    fixed-position fields can only be found after its *last* closing paren. Splitting the
+    whole line on whitespace, which is the obvious reading, mis-indexes every field for a
+    process whose name contains a space.
+    """
+    try:
+        fields = stat[stat.rindex(")") + 2 :].split()
+        return int(fields[19])
+    except ValueError, IndexError:
+        return None
+
+
+def read_start_time(pid: int) -> int | None:
+    """
+    Wall-clock epoch second the process started.
+
+    Derived from boot time rather than sent as an age, so the value is stable across scans
+    and does not push a change every second just by getting older.
+    """
+    stat = _read(pid, "stat")
+    if not stat:
+        return None
+    try:
+        uptime = float(Path("/proc/uptime").read_text().split()[0])
+    except OSError, ValueError, IndexError:
+        return None
+    ticks = ticks_from_stat(stat)
+    if ticks is None:
+        return None
+    return round(time.time() - uptime + ticks / CLOCK_TICKS_PER_SECOND)
+
+
+def home_directory() -> str:
+    return pwd.getpwuid(os.getuid()).pw_dir
