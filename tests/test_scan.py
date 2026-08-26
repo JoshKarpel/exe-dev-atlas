@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import fields
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from without_http import ConnectionPool
 from exe_dev_atlas.probes import Probes
 from exe_dev_atlas.reflection import Vm
 from exe_dev_atlas.scan import Broadcast
+from exe_dev_atlas.scan import Row
 from exe_dev_atlas.scan import scan_forever
 from exe_dev_atlas.scan import scan_once
 
@@ -87,6 +89,29 @@ async def test_a_scan_that_found_nothing_new_is_not_news() -> None:
     waiting.cancel()
 
     assert not done
+
+
+def test_every_field_of_a_row_reaches_the_browser() -> None:
+    # `as_dict` names its fields by hand, so nothing but this pins it to `Row`. A field added
+    # to one and not the other fails silently and permanently: `atlas.js` dereferences the
+    # payload unguarded, so the first message throws, the page freezes on stale rows, and
+    # `state` goes on reading "live" with nothing logged on either side.
+    row = Row(
+        port=4321,
+        addresses=("127.0.0.1",),
+        pid=8812,
+        command_name="grafana",
+        command_line="grafana server",
+        directory="/srv/grafana",
+        user="pilot",
+        started_at=1_787_000_123,
+        is_http=True,
+        status=200,
+        title="Grafana",
+        server="nginx/1.25",
+    )
+
+    assert set(row.as_dict()) == {field.name for field in fields(Row)}
 
 
 def fake_socket_statistics(tmp_path: Path, listing: str, exit_code: int = 0) -> str:

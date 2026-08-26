@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import logging
 import os
 import pwd
 import re
 import shutil
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 from typing import Final
 
 from exe_dev_atlas.processes import run
+
+logger = logging.getLogger(__name__)
 
 # The range exe.dev's proxy forwards verbatim. A listener outside it is real but
 # unreachable from outside the VM, so listing it would offer a dead link.
@@ -195,19 +199,9 @@ def ticks_from_stat(stat: str) -> int | None:
         return None
 
 
-def boot_epoch() -> int | None:
-    """
-    The epoch second this machine booted, per `/proc/stat`, read once for the process.
-
-    `btime` rather than `time.time() - /proc/uptime`, which is the obvious reading and is
-    unstable in a way that costs real traffic. `/proc/uptime` is formatted to centiseconds,
-    so the derived boot instant wanders across a ~10ms band from one read to the next; a
-    process whose start time lands near a half-second boundary then rounds to a different
-    epoch second on each scan, the payload pair differs, and a full re-serialize and a full
-    client re-render go out once a second forever. `btime` is an integer the kernel already
-    settled and does not move.
-    """
-    for line in _read_text(Path("/proc/stat")).splitlines():
+def parse_boot_epoch(proc_stat: str) -> int | None:
+    """The `btime` field of `/proc/stat`: the epoch second this machine booted."""
+    for line in proc_stat.splitlines():
         name, _, value = line.partition(" ")
         if name == "btime":
             try:
@@ -217,14 +211,31 @@ def boot_epoch() -> int | None:
     return None
 
 
-def _read_text(path: Path) -> str:
+@cache
+def boot_epoch() -> int | None:
+    """
+    When this machine booted, asked once and held for the life of the process.
+
+    `btime` rather than `time.time() - /proc/uptime`, which is the obvious reading and is
+    unstable in a way that costs real traffic. `/proc/uptime` is formatted to centiseconds,
+    so the derived boot instant wanders across a 10ms band from one read to the next; a
+    process whose start time lands within that band of a half-second boundary then rounds to
+    a different epoch second on each scan, the payload pair differs, and a full re-serialize
+    and a full client re-render go out once a second for as long as it runs. `btime` is an
+    integer the kernel already settled and does not move.
+
+    Cached rather than read per call, which is also what bounds the complaint below to one
+    line: an unreadable `/proc/stat` costs every row its uptime for good, so the one thing
+    it must not do is fail quietly.
+    """
     try:
-        return path.read_text()
-    except OSError:
-        return ""
-
-
-BOOT_EPOCH: Final = boot_epoch()
+        booted = parse_boot_epoch(Path("/proc/stat").read_text())
+    except OSError as unreadable:
+        logger.warning(f"No uptimes: /proc/stat could not be read, and it is read once: {unreadable!r}")
+        return None
+    if booted is None:
+        logger.warning("No uptimes: /proc/stat carries no readable `btime`, and it is read once")
+    return booted
 
 
 def read_start_time(pid: int) -> int | None:
@@ -234,7 +245,8 @@ def read_start_time(pid: int) -> int | None:
     Derived from boot time rather than sent as an age, so the value is stable across scans
     and does not push a change every second just by getting older.
     """
-    if BOOT_EPOCH is None:
+    booted = boot_epoch()
+    if booted is None:
         return None
     stat = read_entry(pid, "stat")
     if not stat:
@@ -242,7 +254,7 @@ def read_start_time(pid: int) -> int | None:
     ticks = ticks_from_stat(stat)
     if ticks is None:
         return None
-    return round(BOOT_EPOCH + ticks / CLOCK_TICKS_PER_SECOND)
+    return round(booted + ticks / CLOCK_TICKS_PER_SECOND)
 
 
 def home_directory() -> str:

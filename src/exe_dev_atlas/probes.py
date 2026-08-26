@@ -155,8 +155,15 @@ class Probes:
             task.add_done_callback(partial(self._forget, key))
 
     async def aclose(self) -> None:
-        """Cancel every probe still in flight, so nothing outlives the scan that started it."""
-        await cancel_futures(self._probing.values())
+        """
+        Cancel every probe still in flight, so nothing outlives the scan that started it.
+
+        Filtered to what is still running, as `cancel_futures` asks: a finished task holding
+        an exception propagates it out of the await loop, and the probes queued behind it are
+        then cancelled but never awaited. `_probing` can hold one, because the entry is
+        dropped from a done callback that runs a turn after the task itself finished.
+        """
+        await cancel_futures(task for task in self._probing.values() if not task.done())
 
     def _forget(self, key: tuple[int, int | None], _finished: asyncio.Task[None]) -> None:
         self._probing.pop(key, None)

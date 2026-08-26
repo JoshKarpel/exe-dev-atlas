@@ -4,6 +4,7 @@ import pytest
 from conftest import line
 
 from exe_dev_atlas.listeners import Listener
+from exe_dev_atlas.listeners import parse_boot_epoch
 from exe_dev_atlas.listeners import parse_listeners
 from exe_dev_atlas.listeners import ticks_from_stat
 
@@ -123,3 +124,24 @@ class TestStartTimeParsing:
     )
     def test_a_stat_line_that_cannot_be_read_yields_nothing_rather_than_a_wrong_number(self, stat: str) -> None:
         assert ticks_from_stat(stat) is None
+
+
+class TestBootEpochParsing:
+    def test_the_btime_field_is_read_from_among_the_others(self) -> None:
+        stat = "cpu  199 0 87 4212\nintr 90210\nbtime 1787145398\nprocesses 3401\n"
+
+        assert parse_boot_epoch(stat) == 1787145398
+
+    @pytest.mark.parametrize(
+        "stat",
+        [
+            pytest.param("", id="empty"),
+            pytest.param("cpu  199 0 87 4212\nintr 90210\n", id="no-btime-line"),
+            pytest.param("btime\n", id="btime-with-no-value"),
+            pytest.param("btime notanumber\n", id="btime-that-is-not-a-number"),
+        ],
+    )
+    def test_a_stat_file_carrying_no_readable_btime_yields_nothing(self, stat: str) -> None:
+        # Rather than a wrong epoch: every uptime on the page is derived from this, so a
+        # number guessed here is a wrong "up 3h" on every row.
+        assert parse_boot_epoch(stat) is None

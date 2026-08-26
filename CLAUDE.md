@@ -83,10 +83,13 @@ needs to invoke the exact binary that is serving. `scan.build_row` deliberately 
 `Row` is serialized straight to every connected browser. Keep that split when adding fields.
 
 `Row.as_dict` names every field that crosses, rather than reaching for `dataclasses.asdict`,
-which recurses and deep-copies each value on the way out. So a field added to `Row` reaches
-the browser only once it is named there too, which is the trade: the omission of
-`executable` is visible at the point it is decided, and a new field is opt-in rather than
-published by whichever dataclass it landed on.
+which recurses and deep-copies each value on the way out. What that buys is the omission of
+`executable` being visible at the point it is decided; what it costs is a field list nothing
+derives, so a field added to `Row` and forgotten here never reaches the browser. That failure
+is silent and permanent (`atlas.js` reads the payload unguarded, so the first message throws,
+the page freezes on stale rows, and `state` goes on reading "live"), which is why
+`test_every_field_of_a_row_reaches_the_browser` pins the two together. Adding a field to
+`Row` means adding it to `as_dict`, and the suite says so.
 
 ### Probing is off the scan loop
 
@@ -114,8 +117,9 @@ service manager.
 
 ### Functional core
 
-`parse_listeners`, `ticks_from_stat`, `build_row`, `is_owner`, `unit_text`, `is_zellij_web`,
-`format_probe_title`, and `page.shell` are pure and tested directly. The I/O shell around
+`parse_listeners`, `ticks_from_stat`, `parse_boot_epoch`, `build_row`, `Row.as_dict`,
+`is_owner`, `unit_text`, `is_zellij_web`, `format_probe_title`, and `page.shell` are pure and
+tested directly. The I/O shell around
 them is thin: `processes.run` returns a `Ran` value (a timeout is an outcome, not an
 exception; `.checked()` is the loud version), and reflection failures return empty values
 that every caller is written to treat as an honest "no answer".
