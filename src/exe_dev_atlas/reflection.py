@@ -6,13 +6,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Final
 
 import h11
+from without_async import timeout
 from without_http import Client
 from without_http import request
 
@@ -60,11 +60,10 @@ async def _published(client: Client, url: str) -> dict[str, object]:
     `OSError`, and a body that is not JSON as a `JSONDecodeError`, which is a `ValueError`.
     """
     try:
-        async with asyncio.timeout(REFLECTION_TIMEOUT.total_seconds()):
-            async with request(client, "GET", url) as (head, body):
-                if head.status != 200:
-                    return {}
-                published = json.loads(await body.read())
+        async with timeout(REFLECTION_TIMEOUT), request(client, "GET", url) as (head, body):
+            if head.status != 200:
+                return {}
+            published = json.loads(await body.read())
     except OSError, TimeoutError, ValueError, h11.RemoteProtocolError:
         return {}
     return published if isinstance(published, dict) else {}

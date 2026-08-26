@@ -1,18 +1,11 @@
 from __future__ import annotations
 
 import pytest
+from conftest import line
 
 from exe_dev_atlas.listeners import Listener
 from exe_dev_atlas.listeners import parse_listeners
 from exe_dev_atlas.listeners import ticks_from_stat
-
-# One `ss --tcp --listening --numeric --processes --no-header` line, with the columns it
-# actually emits: State, Recv-Q, Send-Q, Local, Peer, Process.
-LISTEN = 'LISTEN 0      4096   {local}      0.0.0.0:*    users:(("{name}",pid={pid},fd=3))'
-
-
-def line(local: str, name: str = "server", pid: int = 4711) -> str:
-    return LISTEN.format(local=local, name=name, pid=pid)
 
 
 def test_a_single_listener_becomes_one_row_carrying_its_address_and_pid() -> None:
@@ -28,16 +21,16 @@ def test_the_same_port_bound_on_ipv4_and_ipv6_collapses_to_one_row() -> None:
 
 
 @pytest.mark.parametrize(
-    ("local", "why"),
+    "local",
     [
-        pytest.param("127.0.0.1:22", "below the proxied range", id="ssh"),
-        pytest.param("127.0.0.1:2999", "one below the first routed port", id="just-below"),
-        pytest.param("127.0.0.1:10000", "one above the last routed port", id="just-above"),
-        pytest.param("127.0.0.1:54321", "an ephemeral port well above the range", id="ephemeral"),
+        pytest.param("127.0.0.1:22", id="ssh-below-the-range"),
+        pytest.param("127.0.0.1:2999", id="one-below-the-first-routed-port"),
+        pytest.param("127.0.0.1:10000", id="one-above-the-last-routed-port"),
+        pytest.param("127.0.0.1:54321", id="ephemeral-well-above-the-range"),
     ],
 )
-def test_a_port_outside_the_proxied_range_is_dropped(local: str, why: str) -> None:
-    assert parse_listeners(line(local)) == [], why
+def test_a_port_outside_the_proxied_range_is_dropped(local: str) -> None:
+    assert parse_listeners(line(local)) == []
 
 
 @pytest.mark.parametrize(

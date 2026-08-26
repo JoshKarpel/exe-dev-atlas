@@ -13,6 +13,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 
+from without_async import timeout
+
 
 class ProgramFailed(RuntimeError):
     """
@@ -88,7 +90,7 @@ async def run(
         return Ran(command=tuple(command), exit_code=-1, stdout="", stderr=str(unstartable), timed_out=False)
 
     try:
-        async with asyncio.timeout(None if limit is None else limit.total_seconds()):
+        async with timeout(limit):
             stdout, stderr = await process.communicate()
     except TimeoutError:
         process.kill()

@@ -4,7 +4,6 @@ import os
 import pwd
 import re
 import shutil
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -143,8 +142,8 @@ def read_process(pid: int | None) -> Process:
         return NO_PROCESS
 
     return Process(
-        command_name=_read(pid, "comm").strip(),
-        command_line=" ".join(_read(pid, "cmdline").split("\0")).strip(),
+        command_name=read_entry(pid, "comm").strip(),
+        command_line=" ".join(read_entry(pid, "cmdline").split("\0")).strip(),
         directory=_link(pid, "cwd"),
         user=_owner(pid),
         started_at=read_start_time(pid),
@@ -158,7 +157,8 @@ def _entry(pid: int, name: str) -> Path:
     return Path("/proc") / str(pid) / name
 
 
-def _read(pid: int, name: str) -> str:
+def read_entry(pid: int, name: str) -> str:
+    """One `/proc/<pid>/<name>` as text, or "" where it could not be read."""
     try:
         return _entry(pid, name).read_bytes().decode("utf-8", "replace")
     except OSError:
@@ -195,6 +195,38 @@ def ticks_from_stat(stat: str) -> int | None:
         return None
 
 
+def boot_epoch() -> int | None:
+    """
+    The epoch second this machine booted, per `/proc/stat`, read once for the process.
+
+    `btime` rather than `time.time() - /proc/uptime`, which is the obvious reading and is
+    unstable in a way that costs real traffic. `/proc/uptime` is formatted to centiseconds,
+    so the derived boot instant wanders across a ~10ms band from one read to the next; a
+    process whose start time lands near a half-second boundary then rounds to a different
+    epoch second on each scan, the payload pair differs, and a full re-serialize and a full
+    client re-render go out once a second forever. `btime` is an integer the kernel already
+    settled and does not move.
+    """
+    for line in _read_text(Path("/proc/stat")).splitlines():
+        name, _, value = line.partition(" ")
+        if name == "btime":
+            try:
+                return int(value.strip())
+            except ValueError:
+                return None
+    return None
+
+
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text()
+    except OSError:
+        return ""
+
+
+BOOT_EPOCH: Final = boot_epoch()
+
+
 def read_start_time(pid: int) -> int | None:
     """
     Wall-clock epoch second the process started.
@@ -202,17 +234,15 @@ def read_start_time(pid: int) -> int | None:
     Derived from boot time rather than sent as an age, so the value is stable across scans
     and does not push a change every second just by getting older.
     """
-    stat = _read(pid, "stat")
-    if not stat:
+    if BOOT_EPOCH is None:
         return None
-    try:
-        uptime = float(Path("/proc/uptime").read_text().split()[0])
-    except OSError, ValueError, IndexError:
+    stat = read_entry(pid, "stat")
+    if not stat:
         return None
     ticks = ticks_from_stat(stat)
     if ticks is None:
         return None
-    return round(time.time() - uptime + ticks / CLOCK_TICKS_PER_SECOND)
+    return round(BOOT_EPOCH + ticks / CLOCK_TICKS_PER_SECOND)
 
 
 def home_directory() -> str:

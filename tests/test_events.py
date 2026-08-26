@@ -9,6 +9,7 @@ from without_asgi import HttpScope
 from without_asgi import Outbound
 from without_asgi import ResponseBody
 from without_asgi import ResponseStart
+from without_asgi import headers
 
 from exe_dev_atlas.app import Atlas
 from exe_dev_atlas.app import events
@@ -54,7 +55,7 @@ async def test_the_response_head_declares_an_event_stream(published: Broadcast) 
 
     assert isinstance(head, ResponseStart)
     assert head.status == 200
-    assert dict(head.headers)[b"content-type"] == b"text/event-stream"
+    assert headers.first(head.headers, b"content-type") == b"text/event-stream"
 
 
 async def test_the_response_head_tells_the_proxy_not_to_buffer(published: Broadcast) -> None:
@@ -63,16 +64,26 @@ async def test_the_response_head_tells_the_proxy_not_to_buffer(published: Broadc
     head, *_ = await connect(published, scope(), take=1)
 
     assert isinstance(head, ResponseStart)
-    assert dict(head.headers)[b"x-accel-buffering"] == b"no"
+    assert headers.first(head.headers, b"x-accel-buffering") == b"no"
 
 
-async def test_whatever_the_scan_last_found_arrives_without_waiting_for_the_next_one(
-    published: Broadcast,
+@pytest.mark.parametrize(
+    ("caller", "expected"),
+    [
+        pytest.param(scope(), PUBLIC, id="unauthenticated"),
+        pytest.param(as_caller(OWNER), OWNER_ONLY, id="the-owner"),
+        pytest.param(as_caller("someone@else.com"), PUBLIC, id="another-user"),
+    ],
+)
+async def test_each_caller_receives_the_half_of_the_last_scan_they_are_entitled_to(
+    published: Broadcast, caller: HttpScope, expected: str
 ) -> None:
-    _, body = await connect(published, scope(), take=2)
+    # Also the "without waiting" case: the payload is already published, so it arrives on
+    # connect rather than at the next scan.
+    _, body = await connect(published, caller, take=2)
 
     assert isinstance(body, ResponseBody)
-    assert body.body == f"data: {PUBLIC}\n\n".encode()
+    assert body.body == f"data: {expected}\n\n".encode()
 
 
 async def test_each_frame_is_its_own_chunk_so_the_client_sees_it_when_it_happens(
@@ -82,20 +93,6 @@ async def test_each_frame_is_its_own_chunk_so_the_client_sees_it_when_it_happens
 
     assert isinstance(body, ResponseBody)
     assert body.more_body is True
-
-
-async def test_the_owner_receives_the_payload_carrying_session_names(published: Broadcast) -> None:
-    _, body = await connect(published, as_caller(OWNER), take=2)
-
-    assert isinstance(body, ResponseBody)
-    assert body.body == f"data: {OWNER_ONLY}\n\n".encode()
-
-
-async def test_anybody_else_receives_the_public_payload(published: Broadcast) -> None:
-    _, body = await connect(published, as_caller("someone@else.com"), take=2)
-
-    assert isinstance(body, ResponseBody)
-    assert body.body == f"data: {PUBLIC}\n\n".encode()
 
 
 async def test_a_connection_that_arrives_before_the_first_scan_receives_the_empty_payload() -> None:

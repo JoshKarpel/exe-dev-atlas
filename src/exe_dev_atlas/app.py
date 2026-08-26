@@ -10,12 +10,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from without_asgi import NOT_FOUND
 from without_asgi import ASGIApp
 from without_asgi import Event
 from without_asgi import HttpScope
 from without_asgi import Response
 from without_asgi import ServerSentEvent
 from without_asgi import event_stream
+from without_asgi import headers
 from without_asgi import inventory
 from without_asgi import make_asgi_app
 from without_asgi import with_heartbeat
@@ -89,10 +91,8 @@ def is_owner(scope: HttpScope, owner_email: str) -> bool:
     caller both produce "", and `"" == ""` would otherwise disclose session names to
     everyone at exactly the moment this process knows least.
     """
-    caller = ""
-    for key, value in scope.headers:
-        if key.lower() == CALLER_EMAIL_HEADER:
-            caller = value.decode("utf-8", "replace")
+    sent = headers.get_all(scope.headers, CALLER_EMAIL_HEADER)
+    caller = sent[-1].decode("utf-8", "replace") if sent else ""
     owner = owner_email.strip().casefold()
     return bool(owner) and caller.strip().casefold() == owner
 
@@ -153,11 +153,7 @@ def build_router() -> Router[Atlas]:
 
 
 async def _not_found(_atlas: Atlas, _scope: HttpScope) -> Response:
-    return Response(
-        status=404,
-        headers=((b"content-type", b"text/plain; charset=utf-8"),),
-        body=b"not found\n",
-    )
+    return NOT_FOUND
 
 
 def build_app(port: int) -> ASGIApp:
@@ -174,10 +170,16 @@ def build_app(port: int) -> ASGIApp:
     @asynccontextmanager
     async def lifespan() -> AsyncIterator[Atlas]:
         async with ConnectionPool() as pool:
-            vm = await reflection.read_vm(pool)
+            # Gathered rather than awaited in turn: neither answer depends on the other, and
+            # the server accepts no connections until both land, so a reflection endpoint
+            # that is black-holed costs one timeout at startup rather than two.
+            vm, owner_email = await asyncio.gather(
+                reflection.read_vm(pool),
+                reflection.read_owner_email(pool),
+            )
             atlas = Atlas(
                 broadcast=Broadcast(),
-                owner_email=await reflection.read_owner_email(pool),
+                owner_email=owner_email,
                 page=page.page_response(),
             )
             scan = scan_forever(

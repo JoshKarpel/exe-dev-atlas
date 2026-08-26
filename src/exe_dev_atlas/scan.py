@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import asdict
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Final
@@ -30,7 +29,7 @@ class Row:
     """Everything known about one listening port, ready to render."""
 
     port: int
-    addresses: list[str]
+    addresses: tuple[str, ...]
     pid: int | None
     command_name: str
     command_line: str
@@ -41,6 +40,30 @@ class Row:
     status: int | None
     title: str
     server: str
+
+    def as_dict(self) -> dict[str, object]:
+        """
+        The row as the browser receives it, with every field that crosses named here.
+
+        Written out rather than reached for with `asdict`, which recurses and deep-copies
+        every value on the way. Naming the fields is also what makes the omission of
+        `Process.executable` visible at the point it is decided, rather than a property of
+        which dataclass happened to be passed in.
+        """
+        return {
+            "port": self.port,
+            "addresses": self.addresses,
+            "pid": self.pid,
+            "command_name": self.command_name,
+            "command_line": self.command_line,
+            "directory": self.directory,
+            "user": self.user,
+            "started_at": self.started_at,
+            "is_http": self.is_http,
+            "status": self.status,
+            "title": self.title,
+            "server": self.server,
+        }
 
 
 def build_row(listener: Listener, process: Process, probe: Probe | None) -> Row:
@@ -53,7 +76,7 @@ def build_row(listener: Listener, process: Process, probe: Probe | None) -> Row:
     """
     return Row(
         port=listener.port,
-        addresses=list(listener.addresses),
+        addresses=listener.addresses,
         pid=listener.pid,
         command_name=process.command_name,
         command_line=process.command_line,
@@ -145,7 +168,7 @@ async def scan_once(
     # disclosing anything, and the command line already says `zellij web` to anyone reading
     # the row.
     public = [
-        asdict(row) | {"is_session_server": True} if index in sessions else asdict(row)
+        row.as_dict() | {"is_session_server": True} if index in sessions else row.as_dict()
         for index, row in enumerate(rows)
     ]
     owner = [

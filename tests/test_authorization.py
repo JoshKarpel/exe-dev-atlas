@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from conftest import as_caller
 from conftest import scope
+from without_asgi import HttpScope
 
 from exe_dev_atlas.app import CALLER_EMAIL_HEADER
 from exe_dev_atlas.app import is_owner
@@ -15,15 +16,15 @@ def test_the_owners_own_address_is_recognised() -> None:
 
 
 @pytest.mark.parametrize(
-    ("sent", "why"),
+    "sent",
     [
-        pytest.param("OWNER@EXAMPLE.COM", "addresses are compared case-insensitively", id="uppercase"),
-        pytest.param("Owner@Example.Com", "mixed case is still the same address", id="mixed-case"),
-        pytest.param("  owner@example.com  ", "surrounding whitespace is not part of an address", id="padded"),
+        pytest.param("OWNER@EXAMPLE.COM", id="uppercase"),
+        pytest.param("Owner@Example.Com", id="mixed-case"),
+        pytest.param("  owner@example.com  ", id="surrounded-by-whitespace"),
     ],
 )
-def test_an_address_that_differs_only_in_case_or_padding_is_still_the_owner(sent: str, why: str) -> None:
-    assert is_owner(as_caller(sent), OWNER) is True, why
+def test_an_address_that_differs_only_in_case_or_padding_is_still_the_owner(sent: str) -> None:
+    assert is_owner(as_caller(sent), OWNER) is True
 
 
 def test_the_header_name_is_matched_case_insensitively() -> None:
@@ -96,18 +97,18 @@ class TestFailingClosed:
     process knows least about who anyone is.
     """
 
-    def test_nobody_is_the_owner_when_the_owner_is_unknown(self) -> None:
-        assert is_owner(scope(), "") is False
-
-    def test_a_caller_sending_an_empty_address_is_not_the_owner_when_the_owner_is_unknown(self) -> None:
-        assert is_owner(as_caller(""), "") is False
-
-    def test_a_caller_sending_whitespace_is_not_the_owner_when_the_owner_is_unknown(self) -> None:
-        assert is_owner(as_caller("   "), "") is False
-
-    @pytest.mark.parametrize("caller", ["someone@else.com", "owner@example.com", ""])
-    def test_no_caller_at_all_is_the_owner_when_the_owner_is_unknown(self, caller: str) -> None:
-        assert is_owner(as_caller(caller), "") is False
+    @pytest.mark.parametrize(
+        "caller",
+        [
+            pytest.param(scope(), id="no-header-at-all"),
+            pytest.param(as_caller(""), id="an-empty-address"),
+            pytest.param(as_caller("   "), id="whitespace"),
+            pytest.param(as_caller("someone@else.com"), id="a-different-person"),
+            pytest.param(as_caller(OWNER), id="the-address-that-would-otherwise-match"),
+        ],
+    )
+    def test_nobody_is_the_owner_when_reflection_gave_no_owner(self, caller: HttpScope) -> None:
+        assert is_owner(caller, "") is False
 
     def test_an_owner_of_only_whitespace_authorizes_nobody(self) -> None:
         assert is_owner(as_caller("   "), "   ") is False

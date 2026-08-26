@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from pathlib import Path
 from typing import Final
 
+from exe_dev_atlas.listeners import read_entry
 from exe_dev_atlas.processes import run
 
 # The scan runs once a second, so a lookup that takes longer than this is one whose answer
@@ -35,13 +35,8 @@ def is_zellij_web(command_name: str, command_line: str) -> bool:
 
 def read_environ(pid: int) -> dict[str, str]:
     """The environment a running process was started with, or {} if it cannot be read."""
-    try:
-        raw = (Path("/proc") / str(pid) / "environ").read_bytes()
-    except OSError:
-        return {}
-
     environ = {}
-    for entry in raw.decode("utf-8", "replace").split("\0"):
+    for entry in read_entry(pid, "environ").split("\0"):
         key, _, value = entry.partition("=")
         if key:
             environ[key] = value

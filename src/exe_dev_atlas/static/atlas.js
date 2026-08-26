@@ -84,11 +84,17 @@ function render(payload) {
     workspaces.appendChild(link);
   }
   openable = [];
-  const keep = new Set();
 
-  rows.forEach((row) => {
+  // Stale rows go first, so the position check below compares against a list holding
+  // only rows this payload still has. Doing it afterwards would leave departed rows
+  // sitting at intermediate positions and force every surviving row to move.
+  const keep = new Set(rows.map(keyFor));
+  list.querySelectorAll("li").forEach((li) => {
+    if (!keep.has(li.dataset.key)) li.remove();
+  });
+
+  rows.forEach((row, index) => {
     const key = keyFor(row);
-    keep.add(key);
     const href = linkFor(row, payload.own_port);
     if (href) openable.push(href);
 
@@ -114,7 +120,7 @@ function render(payload) {
     li.classList.toggle("inert", !href);
 
     li.querySelector(".key").textContent =
-      openable.length && href && openable.length <= 9 ? openable.length : "";
+      href && openable.length <= 9 ? openable.length : "";
     li.querySelector(".port").textContent = row.port;
 
     const title = li.querySelector(".title");
@@ -184,11 +190,11 @@ function render(payload) {
       sessions.appendChild(link);
     });
 
-    list.appendChild(li);
-  });
-
-  list.querySelectorAll("li").forEach((li) => {
-    if (!keep.has(li.dataset.key)) li.remove();
+    // Appending an attached node *moves* it, so doing this unconditionally would tear
+    // down and rebuild the whole list once a second. The rows above are updated field by
+    // field for the same reason: the cadence must not take text selection and focus with
+    // it. Touch the list only where a row is new or has actually changed place.
+    if (list.children[index] !== li) list.insertBefore(li, list.children[index] ?? null);
   });
 
   painted = true;

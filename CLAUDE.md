@@ -82,6 +82,12 @@ public payload carries every command line on the box, which is the real reason i
 needs to invoke the exact binary that is serving. `scan.build_row` deliberately drops it: a
 `Row` is serialized straight to every connected browser. Keep that split when adding fields.
 
+`Row.as_dict` names every field that crosses, rather than reaching for `dataclasses.asdict`,
+which recurses and deep-copies each value on the way out. So a field added to `Row` reaches
+the browser only once it is named there too, which is the trade: the omission of
+`executable` is visible at the point it is decided, and a new field is opt-in rather than
+published by whichever dataclass it landed on.
+
 ### Probing is off the scan loop
 
 `probes.Probes` fires probes as tasks and holds results in a dict keyed by `(port, pid)`, so

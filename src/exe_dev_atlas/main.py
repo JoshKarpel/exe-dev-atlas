@@ -10,6 +10,7 @@ import getpass
 import logging
 import os
 import shutil
+from pathlib import Path
 from typing import Annotated
 from typing import Final
 
@@ -97,7 +98,7 @@ def install(port: Port = DEFAULT_PORT) -> None:
     systemctl = systemctl_for(os.environ)
 
     converged = asyncio.run(converge(executable, unit, port, systemctl))
-    _report(converged, port)
+    _report(converged, executable, port)
 
     if not asyncio.run(is_lingering(getpass.getuser())):
         typer.echo(
@@ -119,7 +120,7 @@ def start_logging() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
 
-def _report(converged: Converged, port: int) -> None:
+def _report(converged: Converged, executable: Path, port: int) -> None:
     """
     Say what changed about the unit, then say what is running either way.
 
@@ -129,7 +130,7 @@ def _report(converged: Converged, port: int) -> None:
     change in the code it starts.
     """
     typer.echo(f"installed {converged.unit}" if converged.unit_changed else f"{converged.unit} is already current")
-    typer.echo(f"restarted {SERVICE}, serving on port {port} from {running_executable()}")
+    typer.echo(f"restarted {SERVICE}, serving on port {port} from {executable}")
 
 
 def main() -> None:

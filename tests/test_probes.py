@@ -174,57 +174,51 @@ async def streams_forever(reader: asyncio.StreamReader, writer: asyncio.StreamWr
 
 
 class TestProbingARealListener:
+    @pytest.mark.parametrize(
+        "handler",
+        [
+            pytest.param(not_http, id="answers-in-another-protocol"),
+            pytest.param(says_nothing, id="accepts-then-hangs-up"),
+        ],
+    )
     async def test_a_listener_that_does_not_speak_http_is_reported_as_such(
-        self, listening: Callable[[Handler], Awaitable[int]]
+        self, listening: Callable[[Handler], Awaitable[int]], pool: ConnectionPool, handler: Handler
     ) -> None:
         # This is the case the probe exists for, and the answer has to come back as a value:
         # an exception here is never recorded, so the port is re-probed on every scan
         # forever and the page keeps offering a link to a database.
-        port = await listening(not_http)
+        port = await listening(handler)
 
-        async with ConnectionPool() as pool:
-            probe = await probe_port(pool, port)
+        probe = await probe_port(pool, port)
 
         assert probe.is_http is False
         assert probe.status is None
 
-    async def test_a_listener_that_answers_nothing_at_all_is_reported_as_not_http(
-        self, listening: Callable[[Handler], Awaitable[int]]
-    ) -> None:
-        port = await listening(says_nothing)
-
-        async with ConnectionPool() as pool:
-            probe = await probe_port(pool, port)
-
-        assert probe.is_http is False
-
-    async def test_nothing_is_listening_on_a_closed_port(self) -> None:
+    async def test_nothing_is_listening_on_a_closed_port(self, pool: ConnectionPool) -> None:
         closed = await asyncio.start_server(says_nothing, "127.0.0.1", 0)
         port: int = closed.sockets[0].getsockname()[1]
         closed.close()
         await closed.wait_closed()
 
-        async with ConnectionPool() as pool:
-            probe = await probe_port(pool, port)
+        probe = await probe_port(pool, port)
 
         assert probe.is_http is False
 
     async def test_a_page_whose_body_never_ends_is_still_a_web_server_with_a_title(
-        self, listening: Callable[[Handler], Awaitable[int]]
+        self, listening: Callable[[Handler], Awaitable[int]], pool: ConnectionPool
     ) -> None:
         # Read to the end, this costs the whole probe timeout and then throws away the head
         # it had already parsed, reporting a live web server as not answering HTTP.
         port = await listening(streams_forever)
 
-        async with ConnectionPool() as pool:
-            probe = await probe_port(pool, port)
+        probe = await probe_port(pool, port)
 
         assert probe.is_http is True
         assert probe.status == 200
         assert probe.title == "Tailing"
 
     async def test_an_ordinary_page_carries_its_title_and_status_back(
-        self, listening: Callable[[Handler], Awaitable[int]]
+        self, listening: Callable[[Handler], Awaitable[int]], pool: ConnectionPool
     ) -> None:
         async def serve_a_page(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
             await reader.read(1024)
@@ -236,15 +230,14 @@ class TestProbingARealListener:
 
         port = await listening(serve_a_page)
 
-        async with ConnectionPool() as pool:
-            probe = await probe_port(pool, port)
+        probe = await probe_port(pool, port)
 
         assert probe.is_http is True
         assert probe.status == 200
         assert probe.title == "Grafana"
 
     async def test_a_body_larger_than_the_bound_does_not_stall_the_probe(
-        self, listening: Callable[[Handler], Awaitable[int]]
+        self, listening: Callable[[Handler], Awaitable[int]], pool: ConnectionPool
     ) -> None:
         async def serve_a_huge_page(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
             await reader.read(1024)
@@ -256,7 +249,6 @@ class TestProbingARealListener:
 
         port = await listening(serve_a_huge_page)
 
-        async with ConnectionPool() as pool:
-            probe = await probe_port(pool, port)
+        probe = await probe_port(pool, port)
 
         assert probe.title == "Huge"

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 
 import pytest
+from conftest import line
 from without_http import ConnectionPool
 
 from exe_dev_atlas.probes import Probes
@@ -95,21 +97,20 @@ def fake_socket_statistics(tmp_path: Path, listing: str, exit_code: int = 0) -> 
     return str(command)
 
 
-async def test_a_scan_publishes_a_row_for_every_listener(tmp_path: Path) -> None:
+async def test_a_scan_publishes_a_row_for_every_listener(tmp_path: Path, pool: ConnectionPool) -> None:
     listing = "\n".join(
         [
-            f'LISTEN 0 4096 127.0.0.1:3456 0.0.0.0:* users:(("server",pid={ABSENT_PID},fd=3))',
-            f'LISTEN 0 4096 192.168.1.5:3456 0.0.0.0:* users:(("other",pid={ABSENT_PID - 1},fd=3))',
+            line("127.0.0.1:3456", name="server", pid=ABSENT_PID),
+            line("192.168.1.5:3456", name="other", pid=ABSENT_PID - 1),
         ]
     )
     broadcast = Broadcast()
 
-    async with ConnectionPool() as pool:
-        probes = Probes(pool)
-        try:
-            await scan_once(broadcast, probes, fake_socket_statistics(tmp_path, listing), OWN_PORT, VM, VSCODE_URL)
-        finally:
-            await probes.aclose()
+    probes = Probes(pool)
+    try:
+        await scan_once(broadcast, probes, fake_socket_statistics(tmp_path, listing), OWN_PORT, VM, VSCODE_URL)
+    finally:
+        await probes.aclose()
 
     _version, payload = await broadcast.wait(NOTHING_SEEN, is_owner=False)
     published = json.loads(payload)
@@ -117,25 +118,38 @@ async def test_a_scan_publishes_a_row_for_every_listener(tmp_path: Path) -> None
     assert published["vm_name"] == "parrot"
 
 
+class Signalling(logging.Handler):
+    """Sets an event as soon as the scan logs anything, so the test waits on the signal itself."""
+
+    def __init__(self, complained: asyncio.Event) -> None:
+        super().__init__()
+        self.complained = complained
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.complained.set()
+
+
 async def test_a_scan_that_could_not_read_the_machine_says_so_and_scans_again(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, pool: ConnectionPool
 ) -> None:
     # The failure this guards against is silent and permanent: a scan task that dies leaves
     # the page holding its last payload, heartbeated, and reading "live" forever.
     broken = fake_socket_statistics(tmp_path, "ss: cannot open netlink socket", exit_code=1)
     broadcast = Broadcast()
+    complained = asyncio.Event()
+    logger = logging.getLogger("exe_dev_atlas.scan")
+    handler = Signalling(complained)
+    logger.addHandler(handler)
 
-    async with ConnectionPool() as pool:
-        scanning = asyncio.ensure_future(scan_forever(broadcast, pool, broken, OWN_PORT, VM, VSCODE_URL))
-        try:
-            for _ in range(500):
-                if caplog.records:
-                    break
-                await asyncio.sleep(0.01)
-            assert not scanning.done()
-        finally:
-            scanning.cancel()
-            await asyncio.gather(scanning, return_exceptions=True)
+    scanning = asyncio.ensure_future(scan_forever(broadcast, pool, broken, OWN_PORT, VM, VSCODE_URL))
+    try:
+        async with asyncio.timeout(5):
+            await complained.wait()
+        assert not scanning.done()
+    finally:
+        logger.removeHandler(handler)
+        scanning.cancel()
+        await asyncio.gather(scanning, return_exceptions=True)
 
     (complaint,) = caplog.records
     assert complaint.levelname == "WARNING"

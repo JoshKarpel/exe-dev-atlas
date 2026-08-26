@@ -5,10 +5,15 @@ import html
 import re
 import time
 from dataclasses import dataclass
+from dataclasses import replace
 from datetime import timedelta
+from functools import partial
 from typing import Final
 
 import h11
+from without_asgi import headers
+from without_async import cancel_futures
+from without_async import timeout
 from without_http import Client
 from without_http import ResponseBody
 from without_http import request
@@ -48,21 +53,16 @@ def format_probe_title(body: str) -> str:
     return html.unescape(" ".join(match.group(1).split()))
 
 
+def _text(value: bytes | None) -> str:
+    """A header value as text, or "" where the field was absent."""
+    return "" if value is None else value.decode("latin-1")
+
+
 def describe_response(status: int, content_type: str, server: str, body: bytes, at: float) -> Probe:
     title = ""
     if "html" in content_type.lower():
         title = format_probe_title(body.decode("utf-8", "replace"))
     return Probe(is_http=True, status=status, title=title, server=server, attempts=1, at=at)
-
-
-def _header(headers: object, name: bytes) -> str:
-    """One header value out of the raw pairs, case-insensitively, or ""."""
-    if not isinstance(headers, tuple | list):
-        return ""
-    for key, value in headers:
-        if key.lower() == name:
-            return value.decode("latin-1")
-    return ""
 
 
 async def read_beginning(body: ResponseBody, limit: int) -> bytes:
@@ -100,20 +100,22 @@ async def probe_port(client: Client, port: int) -> Probe:
     """
     now = time.time()
     try:
-        async with asyncio.timeout(PROBE_TIMEOUT.total_seconds()):
-            async with request(
+        async with (
+            timeout(PROBE_TIMEOUT),
+            request(
                 client,
                 "GET",
                 f"http://127.0.0.1:{port}/",
                 headers=((b"user-agent", b"exe-dev-atlas"), (b"accept", b"text/html")),
-            ) as (head, body):
-                return describe_response(
-                    head.status,
-                    _header(head.headers, b"content-type"),
-                    _header(head.headers, b"server"),
-                    await read_beginning(body, PROBE_MAX_BYTES),
-                    now,
-                )
+            ) as (head, body),
+        ):
+            return describe_response(
+                head.status,
+                _text(headers.first(head.headers, b"content-type")),
+                _text(headers.first(head.headers, b"server")),
+                await read_beginning(body, PROBE_MAX_BYTES),
+                now,
+            )
     except OSError, TimeoutError, ValueError, h11.RemoteProtocolError:
         return Probe(is_http=False, status=None, title="", server="", attempts=1, at=now)
 
@@ -131,8 +133,10 @@ class Probes:
     def __init__(self, client: Client) -> None:
         self._client = client
         self._results: dict[tuple[int, int | None], Probe] = {}
-        self._in_flight: set[tuple[int, int | None]] = set()
-        self._tasks: set[asyncio.Task[None]] = set()
+        # The probe running for each key, which is both the "already asked" ledger and the
+        # strong reference that keeps it alive: asyncio holds only a weak one and will
+        # otherwise collect a task mid-probe.
+        self._probing: dict[tuple[int, int | None], asyncio.Task[None]] = {}
 
     def get(self, listener: Listener) -> Probe | None:
         return self._results.get((listener.port, listener.pid))
@@ -146,25 +150,19 @@ class Probes:
             key = (listener.port, listener.pid)
             if not self._is_due(key):
                 continue
-            self._in_flight.add(key)
-            # Held in a set until done, because asyncio keeps only a weak reference to a
-            # running task and will otherwise collect one mid-probe.
             task = asyncio.create_task(self._run(listener))
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
+            self._probing[key] = task
+            task.add_done_callback(partial(self._forget, key))
 
     async def aclose(self) -> None:
         """Cancel every probe still in flight, so nothing outlives the scan that started it."""
-        for task in list(self._tasks):
-            task.cancel()
-        for task in list(self._tasks):
-            try:  # noqa: SIM105
-                await task
-            except asyncio.CancelledError:
-                pass
+        await cancel_futures(self._probing.values())
+
+    def _forget(self, key: tuple[int, int | None], _finished: asyncio.Task[None]) -> None:
+        self._probing.pop(key, None)
 
     def _is_due(self, key: tuple[int, int | None]) -> bool:
-        if key in self._in_flight:
+        if key in self._probing:
             return False
         previous = self._results.get(key)
         if previous is None:
@@ -175,18 +173,8 @@ class Probes:
 
     async def _run(self, listener: Listener) -> None:
         key = (listener.port, listener.pid)
-        try:
-            probe = await probe_port(self._client, listener.port)
-        finally:
-            self._in_flight.discard(key)
+        probe = await probe_port(self._client, listener.port)
         previous = self._results.get(key)
         if previous is not None and not probe.is_http:
-            probe = Probe(
-                is_http=False,
-                status=None,
-                title="",
-                server="",
-                attempts=previous.attempts + 1,
-                at=probe.at,
-            )
+            probe = replace(probe, attempts=previous.attempts + 1)
         self._results[key] = probe

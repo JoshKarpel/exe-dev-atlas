@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 import pytest
+from without_asgi import headers
 
 from exe_dev_atlas.listeners import ROUTED_PORTS
 from exe_dev_atlas.page import SCRIPT_URL
@@ -69,16 +70,15 @@ def test_the_favicon_starts_as_an_empty_data_uri_rather_than_a_fetch() -> None:
 class TestPageResponse:
     def test_the_response_is_html_and_successful(self) -> None:
         response = page_response()
-        headers = dict(response.headers)
 
         assert response.status == 200
-        assert headers[b"content-type"] == b"text/html; charset=utf-8"
+        assert headers.first(response.headers, b"content-type") == b"text/html; charset=utf-8"
 
     def test_the_shell_is_not_stored_by_caches(self) -> None:
         # It links two assets whose names carry no fingerprint and holds the ids the script
         # depends on, so a cached shell beside a fresh script is the combination that breaks
         # without any error to see.
-        assert dict(page_response().headers)[b"cache-control"] == b"no-store"
+        assert headers.first(page_response().headers, b"cache-control") == b"no-store"
 
     def test_the_body_is_the_rendered_shell(self) -> None:
         assert page_response().body == shell().encode()
