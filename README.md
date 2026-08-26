@@ -94,5 +94,6 @@ $ just test
 ```
 
 `just --list` shows the rest. Built on [`without`](https://without.help): `without-http`
-serves, `without-web` routes, `without-html` renders the shell, and `without-asgi` serves the
-stylesheet and script out of an inventory walked once at startup.
+serves, `without-web` routes, `without-html` renders the shell, `without-async` supervises the
+scan task, and `without-asgi` both frames the event stream and serves the stylesheet and
+script out of an inventory walked once at startup.

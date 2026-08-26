@@ -10,18 +10,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from without import sleep_forever
-from without.tasks import background_task
 from without_asgi import ASGIApp
+from without_asgi import Event
 from without_asgi import HttpScope
-from without_asgi import Outbound
 from without_asgi import Response
-from without_asgi import ResponseBody
-from without_asgi import ResponseStart
+from without_asgi import ServerSentEvent
+from without_asgi import event_stream
 from without_asgi import inventory
 from without_asgi import make_asgi_app
+from without_asgi import with_heartbeat
+from without_async import background_task
+from without_async import sleep_forever
 from without_http import ConnectionPool
 from without_http import serving
+from without_web import Reply
 from without_web import Router
 from without_web import get
 from without_web import handle
@@ -30,7 +32,6 @@ from without_web import static_files
 
 from exe_dev_atlas import page
 from exe_dev_atlas import reflection
-from exe_dev_atlas import sse
 from exe_dev_atlas.listeners import home_directory
 from exe_dev_atlas.listeners import socket_statistics_command
 from exe_dev_atlas.scan import Broadcast
@@ -43,6 +44,12 @@ STATIC_PREFIX: Final = "/static"
 # forged value does not survive the hop. It is absent entirely when the caller is
 # unauthenticated, which is why the comparison below fails closed.
 CALLER_EMAIL_HEADER: Final = b"x-exedev-email"
+
+# exe.dev fronts the VM with a proxy, and this is how the nginx family is told not to hold a
+# response: without it the proxy buffers events until the response ends, which for a stream
+# held open for as long as the page is, is never. `event_stream` leaves it to the caller,
+# since it is one vendor's deployment policy rather than a property of the format.
+UNBUFFERED: Final = ((b"x-accel-buffering", b"no"),)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,25 +85,35 @@ def is_owner(scope: HttpScope, owner_email: str) -> bool:
     return bool(owner) and caller.strip().casefold() == owner
 
 
-async def events(atlas: Atlas, scope: HttpScope) -> AsyncIterator[Outbound]:
+async def payloads(broadcast: Broadcast, *, owner: bool) -> AsyncIterator[ServerSentEvent]:
+    """
+    Each payload the scan publishes, from whatever it holds now, as the frame that carries it.
+
+    Unnamed, so the page's `onmessage` receives it; the browser has one kind of news to hear
+    and naming it would route it to a listener nothing registers.
+    """
+    seen = -1
+    while True:
+        seen, payload = await broadcast.wait(seen, is_owner=owner)
+        yield Event(data=payload)
+
+
+async def events(atlas: Atlas, scope: HttpScope) -> Reply:
     """
     One SSE connection, held open until the client goes away.
 
     Which of the two payloads this connection receives is decided once, here, because this
     is the only place that holds the caller's headers; the scan loop serializes both and
     knows about neither.
-    """
-    yield ResponseStart(status=200, headers=sse.SSE_HEADERS)
 
-    seen = -1
-    owner = is_owner(scope, atlas.owner_email)
-    while True:
-        version, payload = await atlas.broadcast.wait(seen, is_owner=owner)
-        if version == seen:
-            yield ResponseBody(body=sse.COMMENT, more_body=True)
-        else:
-            seen = version
-            yield ResponseBody(body=sse.frame(payload), more_body=True)
+    A quiet machine publishes nothing for as long as it stays quiet, so the stream is
+    heartbeated: a comment every so often keeps an intermediary from reaping a connection
+    the page is still holding.
+    """
+    return event_stream(
+        with_heartbeat(payloads(atlas.broadcast, owner=is_owner(scope, atlas.owner_email))),
+        headers=UNBUFFERED,
+    )
 
 
 async def index(atlas: Atlas) -> Response:

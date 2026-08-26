@@ -1,34 +1,12 @@
 from __future__ import annotations
 
 import pytest
-from without_asgi import Asgi
-from without_asgi import HttpScope
+from conftest import as_caller
+from conftest import scope
 
-from exe_dev_atlas.app import CALLER_EMAIL_HEADER
 from exe_dev_atlas.app import is_owner
 
 OWNER = "owner@example.com"
-
-
-def scope(*headers: tuple[bytes, bytes]) -> HttpScope:
-    return HttpScope(
-        asgi=Asgi(version="3.0", spec_version="2.3"),
-        http_version="1.1",
-        method="GET",
-        scheme="http",
-        path="/events",
-        raw_path=b"/events",
-        query_string=b"",
-        root_path="",
-        headers=headers,
-        client=("127.0.0.1", 54321),
-        server=("127.0.0.1", 8000),
-        extensions={},
-    )
-
-
-def as_caller(email: str) -> HttpScope:
-    return scope((CALLER_EMAIL_HEADER, email.encode()))
 
 
 def test_the_owners_own_address_is_recognised() -> None:

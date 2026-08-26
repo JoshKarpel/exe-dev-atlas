@@ -20,10 +20,6 @@ from exe_dev_atlas.reflection import Vm
 
 SCAN_INTERVAL: Final = timedelta(seconds=1)
 
-# A heartbeat well inside any proxy or load balancer idle timeout, so an open page survives
-# a quiet machine.
-HEARTBEAT_INTERVAL: Final = timedelta(seconds=15)
-
 
 @dataclass(frozen=True, slots=True)
 class Row:
@@ -94,18 +90,13 @@ class Broadcast:
 
     async def wait(self, seen: int, *, is_owner: bool) -> tuple[int, str]:
         """
-        Block until the payload differs from `seen`, or the heartbeat is due.
+        Block until the payload differs from `seen`, then return it and its version.
 
-        A returned version equal to `seen` means the wait timed out with nothing new, which
-        is the caller's cue to send a heartbeat rather than an event.
+        A caller that has seen nothing passes a version no payload can have, so it receives
+        whatever is current without waiting for the next scan to find news.
         """
         async with self._condition:
-            if self._version == seen:
-                try:
-                    async with asyncio.timeout(HEARTBEAT_INTERVAL.total_seconds()):
-                        await self._condition.wait()
-                except TimeoutError:
-                    pass
+            await self._condition.wait_for(lambda: self._version != seen)
             return self._version, (self._owner if is_owner else self._public)
 
 

@@ -27,11 +27,11 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "without-core>=0.0.5",
-    "without-asgi>=0.0.5",
-    "without-web>=0.0.5",
-    "without-http>=0.0.5",
-    "without-html>=0.0.5",
+    "without-async>=0.0.6",
+    "without-asgi>=0.0.6",
+    "without-web>=0.0.6",
+    "without-http>=0.0.6",
+    "without-html>=0.0.6",
     "typer>=0.27",
 ]
 
@@ -52,12 +52,17 @@ exclude-newer = "7 days"
 # whole friction of a path dependency with none of its convenience. What that gives up is real and
 # worth saying: if the account publishing `without` were compromised, this is the one dependency
 # where nothing would stand between the bad release and the next `uv lock`.
+#
+# `without-streams` is here too, though nothing imports it directly: the cooldown applies to
+# whatever the graph resolves, so a transitive package left in would hold the whole set back to
+# a release that predates it.
 [tool.uv.exclude-newer-package]
-without-core = false
+without-async = false
 without-asgi = false
 without-web = false
 without-http = false
 without-html = false
+without-streams = false
 
 [dependency-groups]
 dev = [
