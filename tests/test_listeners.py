@@ -81,13 +81,31 @@ def test_a_wildcard_bind_and_a_loopback_bind_on_one_port_are_one_row_with_both_a
     assert listener.addresses == ("127.0.0.1", "192.168.1.9")
 
 
-def test_the_first_pid_seen_for_a_port_is_the_one_kept() -> None:
-    # A port can appear twice with different pids (a pre-forking server). One row means one
-    # pid, and taking the first is what makes the choice deterministic rather than arbitrary.
-    output = "\n".join([line("127.0.0.1:6060", pid=333), line("[::]:6060", pid=444)])
+def test_two_processes_sharing_a_port_number_stay_two_rows() -> None:
+    # Binding one port number on two addresses from two processes is legal and ordinary.
+    # Merged on the port alone, the surviving row shows one process's address beside the
+    # other's command line, working directory and user, and a session lookup runs against
+    # the wrong pid.
+    output = "\n".join([line("127.0.0.1:3000", name="nodeapp", pid=111), line("192.168.1.5:3000", "otherapp", 222)])
 
-    (listener,) = parse_listeners(output)
-    assert listener.pid == 333
+    assert parse_listeners(output) == [
+        Listener(port=3000, pid=111, addresses=("127.0.0.1",)),
+        Listener(port=3000, pid=222, addresses=("192.168.1.5",)),
+    ]
+
+
+def test_rows_sharing_a_port_number_come_back_in_pid_order() -> None:
+    output = "\n".join([line("127.0.0.1:6060", pid=444), line("192.168.1.5:6060", pid=333)])
+
+    assert [listener.pid for listener in parse_listeners(output)] == [333, 444]
+
+
+def test_a_row_with_no_pid_sorts_ahead_of_the_named_processes_on_its_port() -> None:
+    # A pid of None cannot be compared against a number, so this is the case that decides
+    # whether the ordering is total at all.
+    output = "\n".join(["LISTEN 0 4096 127.0.0.1:7070 0.0.0.0:*", line("192.168.1.5:7070", pid=99)])
+
+    assert [listener.pid for listener in parse_listeners(output)] == [None, 99]
 
 
 class TestStartTimeParsing:

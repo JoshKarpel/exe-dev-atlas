@@ -32,6 +32,10 @@ dependencies = [
     "without-web>=0.0.6",
     "without-http>=0.0.6",
     "without-html>=0.0.6",
+    # Declared because this imports it, though only `without-http` calls it: an HTTP/1.1 parse
+    # failure reaches a caller as h11's own `RemoteProtocolError`, and a listener that answers
+    # a `GET /` in some other protocol is the ordinary case here rather than an exceptional one.
+    "h11>=0.16",
     "typer>=0.27",
 ]
 

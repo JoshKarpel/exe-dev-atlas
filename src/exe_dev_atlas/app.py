@@ -40,9 +40,14 @@ from exe_dev_atlas.scan import scan_forever
 STATIC_ROOT: Final = Path(__file__).parent / "static"
 STATIC_PREFIX: Final = "/static"
 
-# The proxy sets this from the exe.dev session and overwrites whatever the client sent, so a
-# forged value does not survive the hop. It is absent entirely when the caller is
-# unauthenticated, which is why the comparison below fails closed.
+# exe.dev's proxy adds this from the authenticated session, and omits it entirely when the
+# caller is unauthenticated, which is why the comparison below fails closed.
+#
+# The proxy is the only thing authenticating anyone here, so this is a claim about the hop and
+# not about the request. Anything that reaches this port without making that hop, another user
+# on the box, an SSH tunnel, sends whatever address it likes and is believed. That is the
+# boundary the owner-only half rests on, and the README says so where somebody deciding how to
+# share a VM will read it.
 CALLER_EMAIL_HEADER: Final = b"x-exedev-email"
 
 # exe.dev fronts the VM with a proxy, and this is how the nginx family is told not to hold a
@@ -72,6 +77,14 @@ def is_owner(scope: HttpScope, owner_email: str) -> bool:
     """
     Whether the caller is the VM's owner, per exe.dev's own authentication.
 
+    The *last* value wins where the header arrives more than once. A proxy that appends
+    rather than replaces leaves whatever the client sent first in the list, so reading the
+    first one would let a caller name themselves by sending the header twice.
+
+    Decoded as UTF-8, which is what the address was encoded as on the way in. Reading it as
+    latin-1 mangles every non-ASCII address into one that matches nobody, which fails in the
+    safe direction and locks the owner out of their own box for good.
+
     Both sides must be non-empty. Reflection failing at startup and an unauthenticated
     caller both produce "", and `"" == ""` would otherwise disclose session names to
     everyone at exactly the moment this process knows least.
@@ -79,8 +92,7 @@ def is_owner(scope: HttpScope, owner_email: str) -> bool:
     caller = ""
     for key, value in scope.headers:
         if key.lower() == CALLER_EMAIL_HEADER:
-            caller = value.decode("latin-1")
-            break
+            caller = value.decode("utf-8", "replace")
     owner = owner_email.strip().casefold()
     return bool(owner) and caller.strip().casefold() == owner
 

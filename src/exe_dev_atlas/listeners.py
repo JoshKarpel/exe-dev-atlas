@@ -71,13 +71,23 @@ def socket_statistics_command() -> str:
 
 def parse_listeners(ss_output: str) -> list[Listener]:
     """
-    Turn `ss -tlnpH` output into one Listener per routed port.
+    Turn `ss -tlnpH` output into one Listener per listening process.
 
-    A port bound on both IPv4 and IPv6 arrives as two lines and leaves as one row, since it
-    is one service and would be one link.
+    Grouped by port *and* pid, which is what decides the two cases that look alike on the
+    wire. A port bound on both IPv4 and IPv6 arrives as two lines naming one pid and leaves
+    as one row, since it is one service and would be one link. Two different processes on one
+    port number, one on loopback and one on a LAN address, arrive as two lines naming two
+    pids and stay two rows: grouping on the port alone would show one process's addresses
+    beside the other's command line, working directory and user, and run a session lookup
+    against the wrong pid.
+
+    A pre-forking server whose workers each bind the same address with `SO_REUSEPORT` is
+    therefore one row per worker, which is what `ss` reports and what the pid on each row
+    says. Sockets `ss` will not name a process for (another user's) carry no pid, so several
+    of those on one port do collapse into one row; there is nothing left to tell them apart
+    by.
     """
-    pids: dict[int, int | None] = {}
-    addresses: dict[int, set[str]] = {}
+    addresses: dict[tuple[int, int | None], set[str]] = {}
     for line in ss_output.splitlines():
         fields = line.split(maxsplit=5)
         if len(fields) < 4:
@@ -89,11 +99,17 @@ def parse_listeners(ss_output: str) -> list[Listener]:
         if port not in ROUTED_PORTS:
             continue
         pid_match = LISTEN_PID_PATTERN.search(fields[5] if len(fields) > 5 else "")
-        addresses.setdefault(port, set()).add(address.strip("[]"))
-        if pid_match and pids.get(port) is None:
-            pids[port] = int(pid_match.group(1))
-        pids.setdefault(port, None)
-    return [Listener(port=port, pid=pids[port], addresses=tuple(sorted(addresses[port]))) for port in sorted(addresses)]
+        pid = int(pid_match.group(1)) if pid_match else None
+        addresses.setdefault((port, pid), set()).add(address.strip("[]"))
+    return [
+        Listener(port=port, pid=pid, addresses=tuple(sorted(bound)))
+        for (port, pid), bound in sorted(addresses.items(), key=lambda found: _in_order(*found[0]))
+    ]
+
+
+def _in_order(port: int, pid: int | None) -> tuple[int, int]:
+    """A sort key over rows, since a pid of `None` cannot be compared against a number."""
+    return (port, -1 if pid is None else pid)
 
 
 async def read_listeners(command: str) -> list[Listener]:

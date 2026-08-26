@@ -21,6 +21,13 @@ function linkFor(row, ownPort) {
   return location.protocol + "//" + location.hostname + ":" + row.port + "/";
 }
 
+// One port number can carry two rows: two processes bound to it on different
+// addresses. The element a row updates is found by this, so keying it on the
+// port alone would have the second row overwrite the first every paint.
+function keyFor(row) {
+  return row.port + "/" + (row.pid === null ? "" : row.pid);
+}
+
 function ago(epoch) {
   if (!epoch) return "";
   let s = Math.max(0, Math.floor(Date.now() / 1000) - epoch);
@@ -80,15 +87,16 @@ function render(payload) {
   const keep = new Set();
 
   rows.forEach((row) => {
-    keep.add(row.port);
+    const key = keyFor(row);
+    keep.add(key);
     const href = linkFor(row, payload.own_port);
     if (href) openable.push(href);
 
-    let li = list.querySelector('li[data-port="' + row.port + '"]');
+    let li = list.querySelector('li[data-key="' + key + '"]');
     const fresh = !li;
     if (fresh) {
       li = document.createElement("li");
-      li.dataset.port = row.port;
+      li.dataset.key = key;
       li.innerHTML =
         '<a class="row"><span class="key"></span><span class="port"></span>' +
         '<span class="body"><span class="headline"><span class="title"></span></span>' +
@@ -180,7 +188,7 @@ function render(payload) {
   });
 
   list.querySelectorAll("li").forEach((li) => {
-    if (!keep.has(Number(li.dataset.port))) li.remove();
+    if (!keep.has(li.dataset.key)) li.remove();
   });
 
   painted = true;

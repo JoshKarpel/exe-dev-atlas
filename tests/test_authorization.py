@@ -4,6 +4,7 @@ import pytest
 from conftest import as_caller
 from conftest import scope
 
+from exe_dev_atlas.app import CALLER_EMAIL_HEADER
 from exe_dev_atlas.app import is_owner
 
 OWNER = "owner@example.com"
@@ -42,6 +43,38 @@ def test_the_header_name_is_matched_case_insensitively() -> None:
 )
 def test_anybody_else_is_not_the_owner(caller: str) -> None:
     assert is_owner(as_caller(caller), OWNER) is False
+
+
+class TestADuplicatedHeader:
+    """
+    The last value wins, because the proxy's is the last one added.
+
+    A proxy that appends rather than replaces leaves whatever the client sent first in the
+    list, so reading the first value would let a caller authorize themselves by sending the
+    header twice: their own address, then the one the proxy adds behind it.
+    """
+
+    def test_the_owner_behind_a_forged_address_is_still_the_owner(self) -> None:
+        sent = scope((CALLER_EMAIL_HEADER, b"someone@else.com"), (CALLER_EMAIL_HEADER, OWNER.encode()))
+
+        assert is_owner(sent, OWNER) is True
+
+    def test_a_forged_address_behind_the_proxys_own_is_not_the_owner(self) -> None:
+        sent = scope((CALLER_EMAIL_HEADER, OWNER.encode()), (CALLER_EMAIL_HEADER, b"someone@else.com"))
+
+        assert is_owner(sent, OWNER) is False
+
+
+class TestNonAsciiAddresses:
+    def test_an_internationalized_owner_address_is_recognised(self) -> None:
+        # Read as latin-1 the header's UTF-8 bytes arrive as `josé`, which matches nobody and
+        # locks this owner out of their own box for as long as the address holds.
+        owner = "josé@example.com"
+
+        assert is_owner(scope((CALLER_EMAIL_HEADER, owner.encode())), owner) is True
+
+    def test_a_header_that_is_not_valid_utf_8_is_not_the_owner(self) -> None:
+        assert is_owner(scope((CALLER_EMAIL_HEADER, b"\xff\xfe@example.com")), OWNER) is False
 
 
 def test_a_caller_the_proxy_did_not_authenticate_is_not_the_owner() -> None:

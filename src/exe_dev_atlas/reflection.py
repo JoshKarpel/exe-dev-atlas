@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Final
 
+import h11
 from without_http import Client
 from without_http import request
 
@@ -51,6 +52,12 @@ async def _published(client: Client, url: str) -> dict[str, object]:
     Empty is the honest answer rather than a guess, and every caller here is written to
     treat it as one: the page falls back to the hostname the browser used, keeps the
     built-in favicon, offers no VS Code link, and discloses nothing.
+
+    "Did not answer" has to cover every way this can fail, because these run inside the
+    lifespan and anything that escapes takes the whole startup with it: with `Restart=always`
+    the service then restarts every five seconds rather than serving the public view. A
+    connection dropped mid-response arrives as h11's `RemoteProtocolError` rather than as an
+    `OSError`, and a body that is not JSON as a `JSONDecodeError`, which is a `ValueError`.
     """
     try:
         async with asyncio.timeout(REFLECTION_TIMEOUT.total_seconds()):
@@ -58,7 +65,7 @@ async def _published(client: Client, url: str) -> dict[str, object]:
                 if head.status != 200:
                     return {}
                 published = json.loads(await body.read())
-    except OSError, TimeoutError, ValueError:
+    except OSError, TimeoutError, ValueError, h11.RemoteProtocolError:
         return {}
     return published if isinstance(published, dict) else {}
 

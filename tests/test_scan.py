@@ -1,8 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 
+import pytest
+from without_http import ConnectionPool
+
+from exe_dev_atlas.probes import Probes
+from exe_dev_atlas.reflection import Vm
 from exe_dev_atlas.scan import Broadcast
+from exe_dev_atlas.scan import scan_forever
+from exe_dev_atlas.scan import scan_once
+
+VM = Vm(name="parrot", emoji="🦜")
+VSCODE_URL = "vscode://vscode-remote/ssh-remote+parrot.exe.xyz/home/pilot?windowId=_blank"
+OWN_PORT = 8123
+
+# High enough that no process holds it, so `/proc` answers nothing and the row carries the
+# blanks a listener whose process could not be read renders with.
+ABSENT_PID = 4_194_303
 
 FIRST_PUBLIC = '{"rows": [{"port": 4321}]}'
 FIRST_OWNER = '{"rows": [{"port": 4321, "sessions": ["work"]}]}'
@@ -68,6 +85,61 @@ async def test_a_scan_that_found_nothing_new_is_not_news() -> None:
     waiting.cancel()
 
     assert not done
+
+
+def fake_socket_statistics(tmp_path: Path, listing: str, exit_code: int = 0) -> str:
+    """A stand-in for `ss` that reports `listing` and exits however a test wants."""
+    command = tmp_path / "ss"
+    command.write_text(f"#!/bin/sh\ncat <<'LISTING'\n{listing}\nLISTING\nexit {exit_code}\n")
+    command.chmod(0o755)
+    return str(command)
+
+
+async def test_a_scan_publishes_a_row_for_every_listener(tmp_path: Path) -> None:
+    listing = "\n".join(
+        [
+            f'LISTEN 0 4096 127.0.0.1:3456 0.0.0.0:* users:(("server",pid={ABSENT_PID},fd=3))',
+            f'LISTEN 0 4096 192.168.1.5:3456 0.0.0.0:* users:(("other",pid={ABSENT_PID - 1},fd=3))',
+        ]
+    )
+    broadcast = Broadcast()
+
+    async with ConnectionPool() as pool:
+        probes = Probes(pool)
+        try:
+            await scan_once(broadcast, probes, fake_socket_statistics(tmp_path, listing), OWN_PORT, VM, VSCODE_URL)
+        finally:
+            await probes.aclose()
+
+    _version, payload = await broadcast.wait(NOTHING_SEEN, is_owner=False)
+    published = json.loads(payload)
+    assert [(row["port"], row["pid"]) for row in published["rows"]] == [(3456, ABSENT_PID - 1), (3456, ABSENT_PID)]
+    assert published["vm_name"] == "parrot"
+
+
+async def test_a_scan_that_could_not_read_the_machine_says_so_and_scans_again(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The failure this guards against is silent and permanent: a scan task that dies leaves
+    # the page holding its last payload, heartbeated, and reading "live" forever.
+    broken = fake_socket_statistics(tmp_path, "ss: cannot open netlink socket", exit_code=1)
+    broadcast = Broadcast()
+
+    async with ConnectionPool() as pool:
+        scanning = asyncio.ensure_future(scan_forever(broadcast, pool, broken, OWN_PORT, VM, VSCODE_URL))
+        try:
+            for _ in range(500):
+                if caplog.records:
+                    break
+                await asyncio.sleep(0.01)
+            assert not scanning.done()
+        finally:
+            scanning.cancel()
+            await asyncio.gather(scanning, return_exceptions=True)
+
+    (complaint,) = caplog.records
+    assert complaint.levelname == "WARNING"
+    assert "exited 1" in complaint.message
 
 
 async def test_a_change_only_the_owner_can_see_still_reaches_the_owner() -> None:

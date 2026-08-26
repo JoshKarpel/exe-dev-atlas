@@ -17,10 +17,35 @@ $ exe-dev-atlas install
 `install` writes a user systemd unit and starts it. `serve` runs the same server in the
 foreground. Both take `--port` (default 8000, also read from `EXE_DEV_ATLAS_PORT`).
 
+## Run this only on a VM you would hand somebody a shell on
+
+Every row carries a process's full command line, its working directory, its user, and its
+pid, and that is the *public* half of what this serves. Command lines routinely carry
+secrets: a `--backend-store-uri postgresql://user:hunter2@db/app`, an `--api-key`, a token
+in an argument. `/proc/<pid>/cmdline` is world-readable, so the listing covers other users'
+processes on the box too, whatever this daemon can and cannot read of them.
+
+So this page is only as private as the VM it runs on, and exe.dev's
+[sharing](https://exe.dev/docs/sharing) controls are the only thing between it and a reader:
+
+- **Never make a VM running the atlas public.** `share set-public <vm>` drops the login
+  requirement on the [proxied](https://exe.dev/docs/proxy) port, and an unauthenticated
+  caller sends no `x-exedev-email` header, so anybody who finds the hostname gets the page.
+- **Read a Web share as a share of every command line on the box.** `share add <vm> <email>`
+  grants access to the VM's HTTPS proxy, and this page is on it. Withholding the zellij
+  session names and the VS Code link from a non-owner is one degree less detail on the same
+  page, not confidentiality.
+- **The port itself is defended by nothing.** The header the owner check reads is added by
+  exe.dev's proxy. A caller that reaches the port without making that hop, an SSH tunnel or
+  another user on the box, sends whatever address it likes and is served the owner's view.
+
+`share show <vm>` says who has access today.
+
 ## What it shows
 
-One row per listening port in the proxied range, pushed over SSE and updated within a second
-of anything changing:
+One row per listening process in the proxied port range, pushed over SSE and updated within a
+second of anything changing. One port carries two rows where two processes hold it between
+them, one on loopback and one on a LAN address, since they are two services:
 
 - The port, linked, unless it is this page's own or it did not answer HTTP.
 - Whatever the port called itself: the `<title>` of the page it served, falling back to the
@@ -40,7 +65,8 @@ port.
 ## What only the owner sees
 
 The atlas is reachable by anyone the VM is shared with, so two things are withheld from
-everyone but the address the VM is owned by, as exe.dev's proxy reports it:
+everyone but the address the VM is owned by, as exe.dev's proxy reports it. This is a
+smaller distinction than it sounds, and the section above says what it does not cover:
 
 - **zellij session names**, which are often a project or a client name.
 - **the VS Code Remote-SSH link**, which only works for someone with SSH access anyway.

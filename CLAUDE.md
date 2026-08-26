@@ -27,6 +27,10 @@ memory.
 exempted in `[tool.uv.exclude-newer-package]`. Adding a `without` package means adding it
 to that exemption list too, or the whole graph gets held back to a release predating it.
 
+`h11` is a direct dependency although only `without-http` calls it: an HTTP/1.1 parse failure
+reaches a caller as `h11.RemoteProtocolError`, which is the ordinary answer from a listener
+that is not a web server, so `probes` and `reflection` both catch it by name.
+
 Python 3.14 only. The code uses unparenthesized multi-exception `except OSError, ValueError:`
 (PEP 758) in several places; that is valid 3.14 syntax, not the Python 2 bind form.
 
@@ -38,21 +42,39 @@ Python 3.14 only. The code uses unparenthesized multi-exception `except OSError,
 owner's email, the pre-rendered page `Response`) once, then binds `scan.scan_forever` to the
 server's lifetime with `background_task`. Handlers see nothing but the `Atlas`.
 
-`scan_forever` polls once a second: `ss` for listeners, `/proc` for their processes,
-`zellij list-sessions` for session servers. It serializes **two** JSON payloads per scan, a
-public one and an owner one carrying zellij session names and the VS Code link, and hands
-both to `Broadcast.publish`, which only bumps its version when the pair differs from the
-last. Both are built every scan even with no owner connected, because the diff is against
-the pair.
+`scan_once` reads the machine and publishes: `ss` for listeners, `/proc` for their processes,
+`zellij list-sessions` for session servers, gathered rather than awaited in turn so one hung
+session server does not hold every row behind its timeout. It serializes **two** JSON
+payloads, a public one and an owner one carrying zellij session names and the VS Code link,
+and hands both to `Broadcast.publish`, which only bumps its version when the pair differs
+from the last. Both are built every scan even with no owner connected, because the diff is
+against the pair.
+
+`scan_forever` is the cadence around it, and it must **not** die on a bad scan: nothing
+watches this task, so a page holding the last payload keeps its heartbeated connection and
+reads "live" over a listing that stopped moving. `ss` exiting non-zero is logged and the next
+scan retries; anything else is logged on the way out, since `background_task` surfaces a
+task's exception only when the server shuts down. `main.serve` configures logging to stderr,
+which under the unit is the journal (`just logs`).
+
+Polling is deliberate, not a stopgap: the kernel offers no way to watch for a new listening
+socket.
+
+A row is one *listening process*, not one port: `parse_listeners` groups on `(port, pid)`, so
+one pid bound on IPv4 and IPv6 is one row while two processes sharing a port number are two.
+Anything keying rows by port alone (`atlas.js` looks its elements up by `port/pid`) collides
+the moment that happens.
 
 Which payload a connection gets is decided in `app.events`, the only place holding the
 caller's headers. `app.is_owner` compares exe.dev's `x-exedev-email` header against the
 owner address read from reflection at startup, and **fails closed**: both sides must be
 non-empty, so a failed reflection lookup or an unauthenticated caller yields `""`, which
-matches nobody. A box whose lookup failed serves the public view until restarted.
+matches nobody. A box whose lookup failed serves the public view until restarted. The *last*
+header value wins, because a proxy that appends leaves the client's own value first.
 
-Polling is deliberate, not a stopgap: the kernel offers no way to watch for a new listening
-socket.
+Only the proxy authenticates anyone, so a caller that reaches the port without that hop is
+believed. The README says so where somebody deciding how to share a VM will read it, and the
+public payload carries every command line on the box, which is the real reason it matters.
 
 ### What must not cross the wire
 
@@ -66,6 +88,12 @@ needs to invoke the exact binary that is serving. `scan.build_row` deliberately 
 a restarted process is re-probed and a port that accepts a connection then says nothing does
 not stall every other row behind its timeout. A finished probe does not push; the next scan
 carries it.
+
+Every outcome must come back as a `Probe` value. A probe that raises is never recorded, so
+`_is_due` sees no result and re-probes the same port on every scan forever. `read_beginning`
+stops the body read at `PROBE_MAX_BYTES` rather than reading it all and slicing, which is
+both the bound on what a hostile listener can make this hold and what keeps a `/` that
+streams from costing the whole timeout.
 
 ### Install is convergence, not packaging
 

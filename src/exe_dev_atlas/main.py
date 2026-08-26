@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import getpass
+import logging
 import os
 import shutil
 from typing import Annotated
@@ -52,6 +53,7 @@ exe_dev_atlas = typer.Typer(
 @exe_dev_atlas.command()
 def serve(port: Port = DEFAULT_PORT) -> None:
     """Run the atlas in the foreground, until a signal stops it."""
+    start_logging()
     try:
         app.serve_until_stopped(port)
     except NoSocketStatistics as missing:
@@ -103,6 +105,18 @@ def install(port: Port = DEFAULT_PORT) -> None:
             f"rather than at boot. `loginctl enable-linger {getpass.getuser()}` fixes that.",
             err=True,
         )
+
+
+def start_logging() -> None:
+    """
+    Send the server's own account of itself to stderr, which is where the journal reads it.
+
+    The unit sets no `StandardError=`, so systemd's default puts stderr in the journal and
+    `journalctl --user -u exe-dev-atlas` is the whole log story. Nothing here carries a
+    timestamp, because the journal stamps every line it receives and running in the
+    foreground is the same output without one rather than a different format.
+    """
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
 
 def _report(converged: Converged, port: int) -> None:

@@ -8,7 +8,9 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Final
 
+import h11
 from without_http import Client
+from without_http import ResponseBody
 from without_http import request
 
 from exe_dev_atlas.listeners import Listener
@@ -20,8 +22,8 @@ PROBE_RETRY: Final = timedelta(seconds=5)
 PROBE_MAX_ATTEMPTS: Final = 6
 PROBE_TIMEOUT: Final = timedelta(seconds=1.5)
 
-# Enough of a page to carry a `<title>`, and a bound on what a hostile or broken listener
-# can make this process hold.
+# Enough of a page to carry a `<title>`, and the point the read stops at, which is what makes
+# it a bound on what a hostile or broken listener can make this process hold.
 PROBE_MAX_BYTES: Final = 65_536
 
 TITLE_PATTERN: Final = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
@@ -63,12 +65,38 @@ def _header(headers: object, name: bytes) -> str:
     return ""
 
 
+async def read_beginning(body: ResponseBody, limit: int) -> bytes:
+    """
+    The first `limit` bytes of a response body, read no further than that.
+
+    Stopping the read is the point, rather than reading the body and slicing what came back.
+    A `/` that streams (a log tailer, an event stream, a video feed) never ends, so draining
+    it costs the whole probe timeout and holds everything it sent in the meantime, and the
+    probe then reports a web server as not answering HTTP because the head it already parsed
+    was thrown away with the timeout.
+    """
+    held: list[bytes] = []
+    size = 0
+    async for chunk in body:
+        held.append(chunk)
+        size += len(chunk)
+        if size >= limit:
+            break
+    return b"".join(held)[:limit]
+
+
 async def probe_port(client: Client, port: int) -> Probe:
     """
     Ask a port for a page, to tell a web server from a database socket.
 
     A 404 or a 401 is still a web server and still worth a link, so any answer at all
     counts as HTTP; only a connection that fails or never answers does not.
+
+    A listener that answers with something that is not HTTP is the case this exists for, and
+    it arrives as h11's own `RemoteProtocolError`: Postgres and Redis each answer a `GET /`
+    in their own protocol, and a socket that accepts and hangs up says nothing at all. All of
+    them mean "not a web server", which is the answer this returns rather than an exception
+    out of a listing.
     """
     now = time.time()
     try:
@@ -83,10 +111,10 @@ async def probe_port(client: Client, port: int) -> Probe:
                     head.status,
                     _header(head.headers, b"content-type"),
                     _header(head.headers, b"server"),
-                    (await body.read())[:PROBE_MAX_BYTES],
+                    await read_beginning(body, PROBE_MAX_BYTES),
                     now,
                 )
-    except OSError, TimeoutError, ValueError:
+    except OSError, TimeoutError, ValueError, h11.RemoteProtocolError:
         return Probe(is_http=False, status=None, title="", server="", attempts=1, at=now)
 
 
