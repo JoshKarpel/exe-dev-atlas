@@ -124,3 +124,25 @@ name because it names a host to SSH to rather than one to fetch from.
 `page.py` server-renders only a constant shell (element ids the script looks up, two asset
 links). `app.build_router` serves `static/` from an `inventory` walked once at startup, so
 nothing may write into that directory while the process runs.
+
+The payload is JSON rendered by hand rather than HTML fragments swapped by htmx, which is the
+obvious thing to reach for over a stream like this one. htmx is a client for SSE, not an
+alternative to it (`htmx-ext-sse` gives `sse-connect` and `sse-swap`), so the trade is where
+rendering lives, and three things here price it:
+
+- **Links are host-relative.** `href`s built server-side need the host each client used,
+  which makes the payload per-connection and gives up what `Broadcast` is built around:
+  serialize once per scan, share across every connection, diff the pair to decide there is
+  news. Keeping a script to rewrite `href`s after each swap means running both.
+- **A 1 Hz `innerHTML` swap is destructive.** `atlas.js` updates individual fields in place so
+  the cadence does not take text selection, focus, and the `flash` animation with it.
+  Swapping the whole list needs per-row out-of-band swaps keyed on `port/pid` plus idiomorph
+  to morph rather than replace, which is a third asset to carry and `keyFor` relocated.
+- **Nothing for htmx to attach to.** The page has no form, no button, and no navigation that
+  reaches the server; its one interaction is an anchor. htmx's reason to exist, hypermedia
+  controls on any element, would go unused, leaving it a DOM-patching library over a stream.
+
+Polling (`hx-trigger="every 1s"`, or an SSE event as a doorbell for an `hx-get`) is worse
+still: `Broadcast` suppresses a push when the pair is unchanged, so a quiet box currently
+sends nothing, and either polling form costs a request and a full re-render per client per
+second regardless.
