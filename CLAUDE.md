@@ -1,0 +1,98 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Commands
+
+```console
+$ just setup            # uv sync + install pre-commit as a git hook
+$ just test             # mypy, then pytest
+$ just test tests/test_scan.py::test_name   # extra args go straight to pytest
+$ just check            # pre-commit over all files, then mypy
+$ just serve --port 8123  # foreground, on a non-default port
+$ just logs             # journalctl --user -u exe-dev-atlas -f
+```
+
+`pytest` runs under `xdist` (`-n auto`), `pytest-randomly`, and a 10-second per-test
+timeout, all from `addopts`. A test that needs longer raises it with
+`@pytest.mark.timeout(...)` rather than changing the global.
+
+## Dependencies
+
+Built on [`without`](https://without.help), a workspace of small sans-IO ASGI/HTTP/HTML
+libraries. Read the installed packages in `.venv` rather than guessing at an API from
+memory.
+
+`uv` resolution has a 7-day cooldown (`exclude-newer`), with the `without-*` packages
+exempted in `[tool.uv.exclude-newer-package]`. Adding a `without` package means adding it
+to that exemption list too, or the whole graph gets held back to a release predating it.
+
+Python 3.14 only. The code uses unparenthesized multi-exception `except OSError, ValueError:`
+(PEP 758) in several places; that is valid 3.14 syntax, not the Python 2 bind form.
+
+## Architecture
+
+### One scan loop, two payloads, one authorization decision
+
+`app.build_app` is the composition root. Its lifespan builds an `Atlas` (a `Broadcast`, the
+owner's email, the pre-rendered page `Response`) once, then binds `scan.scan_forever` to the
+server's lifetime with `background_task`. Handlers see nothing but the `Atlas`.
+
+`scan_forever` polls once a second: `ss` for listeners, `/proc` for their processes,
+`zellij list-sessions` for session servers. It serializes **two** JSON payloads per scan, a
+public one and an owner one carrying zellij session names and the VS Code link, and hands
+both to `Broadcast.publish`, which only bumps its version when the pair differs from the
+last. Both are built every scan even with no owner connected, because the diff is against
+the pair.
+
+Which payload a connection gets is decided in `app.events`, the only place holding the
+caller's headers. `app.is_owner` compares exe.dev's `x-exedev-email` header against the
+owner address read from reflection at startup, and **fails closed**: both sides must be
+non-empty, so a failed reflection lookup or an unauthenticated caller yields `""`, which
+matches nobody. A box whose lookup failed serves the public view until restarted.
+
+Polling is deliberate, not a stopgap: the kernel offers no way to watch for a new listening
+socket.
+
+### What must not cross the wire
+
+`listeners.Process` carries `executable` (from `/proc/<pid>/exe`), which `zellij.read_sessions`
+needs to invoke the exact binary that is serving. `scan.build_row` deliberately drops it: a
+`Row` is serialized straight to every connected browser. Keep that split when adding fields.
+
+### Probing is off the scan loop
+
+`probes.Probes` fires probes as tasks and holds results in a dict keyed by `(port, pid)`, so
+a restarted process is re-probed and a port that accepts a connection then says nothing does
+not stall every other row behind its timeout. A finished probe does not push; the next scan
+carries it.
+
+### Install is convergence, not packaging
+
+`install.py` renders a user systemd unit naming `sys.executable`, unresolved (resolving a
+venv's `bin/python` symlink yields a base interpreter that cannot import the package). It
+never fetches or builds an environment. In `converge`, the `daemon-reload` is conditional on
+the unit text changing but the `restart` is **unconditional**: an upgrade in place renders
+identical text, so the restart is the only thing that puts new code in front of anything.
+
+`systemctl` is injected as a `Systemctl` callable so tests drive convergence without a
+service manager.
+
+### Functional core
+
+`parse_listeners`, `ticks_from_stat`, `build_row`, `is_owner`, `unit_text`, `is_zellij_web`,
+`format_probe_title`, and `page.shell` are pure and tested directly. The I/O shell around
+them is thin: `processes.run` returns a `Ran` value (a timeout is an outcome, not an
+exception; `.checked()` is the loud version), and reflection failures return empty values
+that every caller is written to treat as an honest "no answer".
+
+### Frontend
+
+`static/atlas.js` renders everything from the SSE payload and builds links from
+`location.hostname`, so they stay correct through the exe.dev proxy or an SSH tunnel alike.
+The one exception is the VS Code Remote-SSH link, built server-side from the reflection VM
+name because it names a host to SSH to rather than one to fetch from.
+
+`page.py` server-renders only a constant shell (element ids the script looks up, two asset
+links). `app.build_router` serves `static/` from an `inventory` walked once at startup, so
+nothing may write into that directory while the process runs.
