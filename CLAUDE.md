@@ -41,6 +41,23 @@ It ships no `py.typed`, so `types-psutil` is a dev dependency; keep the two vers
 Python 3.14 only. The code uses unparenthesized multi-exception `except OSError, ValueError:`
 (PEP 758) in several places; that is valid 3.14 syntax, not the Python 2 bind form.
 
+## Releases
+
+The `version` in `pyproject.toml` is the one that gets published. Publishing runs on a
+published GitHub release and builds the checked-out tree as it stands, so cutting a release
+means bumping that field and opening a `CHANGELOG.md` section under it first, then tagging
+the commit that carries both. The tag is not read and nothing checks the three agree. Upload
+is PyPI trusted publishing from the `pypi` environment, which has to be registered on the
+PyPI project before a release can land.
+
+A `CHANGELOG.md` entry describes what changed *between releases*, so a `Fixed` entry claims
+somebody on the last release could have hit the bug. A fix to code that has not shipped
+belongs in that feature's own `Added` entry if it changed anything a reader can see, and
+nowhere if it did not.
+
+CI runs on Linux alone, and that is not a cost-saving: `TestReadingThisMachine` binds a real
+socket and reads this very process, and every listener fact under it comes from `/proc`.
+
 ## Architecture
 
 ### One scan loop, two payloads, one authorization decision

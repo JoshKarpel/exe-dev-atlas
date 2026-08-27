@@ -1,0 +1,36 @@
+version: 2
+updates:
+  # Actions are pinned to a commit hash, which zizmor's blanket policy requires and which
+  # nothing else in the repository will ever notice going stale. This is what moves them.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: saturday
+    open-pull-requests-limit: 1
+    # github-actions doesn't support per-semver-tier cooldown windows.
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+      day: saturday
+    open-pull-requests-limit: 1
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      # The same exemption `[tool.uv.exclude-newer-package]` makes, for the same reason
+      # given there, and it has to be repeated because these are two separate cooldowns:
+      # one holds back what `uv lock` will resolve, this one holds back when a pull
+      # request gets opened. Leaving it out means the resolver is free to take a fresh
+      # `without` release while nothing offers it one for a week.
+      exclude:
+        - without-*
+    groups:
+      python:
+        patterns: ["*"]

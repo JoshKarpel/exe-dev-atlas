@@ -1,0 +1,20 @@
+name: Set up toolchain
+description: Install uv and Just, then sync the locked environment.
+
+runs:
+  using: composite
+  steps:
+    # No `python-version` input: `uv sync` reads `.python-version` and downloads that
+    # interpreter itself, so the pin lives in one file rather than in every workflow
+    # that would otherwise have to repeat it.
+    - name: Install uv
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      with:
+        enable-cache: true
+
+    - name: Install Just
+      uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+
+    - name: Sync dependencies
+      shell: bash
+      run: uv sync --locked
