@@ -68,7 +68,7 @@ def test_a_line_that_is_not_a_listener_contributes_nothing(garbage: str) -> None
     assert parse_listeners(garbage) == []
 
 
-def test_a_wildcard_bind_and_a_loopback_bind_on_one_port_are_one_row_with_both_addresses() -> None:
+def test_one_process_bound_on_two_addresses_is_one_row_carrying_both() -> None:
     output = "\n".join([line("127.0.0.1:7331", pid=55), line("192.168.1.9:7331", pid=55)])
 
     (listener,) = parse_listeners(output)

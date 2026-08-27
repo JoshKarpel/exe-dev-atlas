@@ -104,6 +104,18 @@ stops the body read at `PROBE_MAX_BYTES` rather than reading it all and slicing,
 both the bound on what a hostile listener can make this hold and what keeps a `/` that
 streams from costing the whole timeout.
 
+A probe asks an address the process actually holds, chosen by `probe_address`, rather than
+loopback. Rows are per listening process, so two processes on one port number would otherwise
+both be described by whichever of them holds loopback, and a process bound only to a LAN
+address has nothing on loopback at all and would read as a web server that does not answer
+HTTP. A wildcard bind is asked on the loopback of its own family.
+
+A result stands only as long as `probe_interval` says. A `<title>`, a status and a `server`
+are claims about the moment the probe ran, and the row around them updates every second, so a
+result held for the process's lifetime is stale in a way nothing on the page distinguishes
+from fresh. A port that has never answered stays on the fast retry ladder while a server
+boots; everything else, answered or given up on, is asked again on `PROBE_REFRESH`.
+
 ### Install is convergence, not packaging
 
 `install.py` renders a user systemd unit naming `sys.executable`, unresolved (resolving a
@@ -118,11 +130,12 @@ service manager.
 ### Functional core
 
 `parse_listeners`, `ticks_from_stat`, `parse_boot_epoch`, `build_row`, `Row.as_dict`,
-`is_owner`, `unit_text`, `is_zellij_web`, `format_probe_title`, and `page.shell` are pure and
-tested directly. The I/O shell around
-them is thin: `processes.run` returns a `Ran` value (a timeout is an outcome, not an
-exception; `.checked()` is the loud version), and reflection failures return empty values
-that every caller is written to treat as an honest "no answer".
+`is_owner`, `unit_text`, `is_zellij_web`, `format_probe_title`, `probe_address`, `probe_url`,
+`probe_interval`, and `page.shell` are pure and tested directly. The I/O shell around
+them is thin: `processes.run` returns a `Ran` value (a timeout and a cancellation both kill
+the child; a timeout is an outcome rather than an exception, and `.checked()` is the loud
+version), and reflection failures return empty values that every caller is written to treat
+as an honest "no answer".
 
 ### Frontend
 

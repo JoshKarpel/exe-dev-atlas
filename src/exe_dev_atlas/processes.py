@@ -96,6 +96,14 @@ async def run(
         process.kill()
         await process.wait()
         return Ran(command=tuple(command), exit_code=-1, stdout="", stderr="", timed_out=True)
+    except asyncio.CancelledError:
+        # Running out of time is not the only way this ends: shutdown cancels the scan loop,
+        # and the cancellation travels into whatever lookup was in flight. `CancelledError` is
+        # a `BaseException` rather than a `TimeoutError`, so without this the child outlives
+        # the server that started it, until a collector happens to finalize the transport.
+        process.kill()
+        await process.wait()
+        raise
 
     return Ran(
         command=tuple(command),

@@ -27,6 +27,18 @@ PROBE_RETRY: Final = timedelta(seconds=5)
 PROBE_MAX_ATTEMPTS: Final = 6
 PROBE_TIMEOUT: Final = timedelta(seconds=1.5)
 
+# What a probe found is only true of the moment it ran: a dev server's `<title>` changes with
+# its index page, and one that starts answering 500s goes on reading "HTTP 200" until it is
+# asked again. Slow enough that a page of long-lived servers costs almost nothing, often
+# enough that the row is not describing what a process said days ago.
+PROBE_REFRESH: Final = timedelta(minutes=5)
+
+# A bind on a wildcard address accepts on every address this machine has, so the loopback of
+# the same family is the one to ask, and it is the address that cannot be firewalled away from
+# this process or moved out from under it by DHCP.
+WILDCARD_ADDRESSES: Final = {"0.0.0.0": "127.0.0.1", "::": "::1"}
+LOOPBACK_ADDRESSES: Final = frozenset(WILDCARD_ADDRESSES.values())
+
 # Enough of a page to carry a `<title>`, and the point the read stops at, which is what makes
 # it a bound on what a hostile or broken listener can make this process hold.
 PROBE_MAX_BYTES: Final = 65_536
@@ -85,7 +97,33 @@ async def read_beginning(body: ResponseBody, limit: int) -> bytes:
     return b"".join(held)[:limit]
 
 
-async def probe_port(client: Client, port: int) -> Probe:
+def probe_address(addresses: tuple[str, ...]) -> str:
+    """
+    Which of the addresses one process bound to ask for a page.
+
+    A row is a listening *process*, not a port number, so two processes can hold one port
+    between them on different addresses. Asking loopback for both reports one process's page
+    against the other's row, and a process bound only to a LAN address has nothing on loopback
+    at all, so it renders as a running web server that does not answer HTTP.
+
+    Loopback wins wherever it is bound, directly or through a wildcard, and otherwise the
+    first address the listener actually holds.
+    """
+    reachable = [WILDCARD_ADDRESSES.get(address, address) for address in addresses]
+    for address in reachable:
+        if address in LOOPBACK_ADDRESSES:
+            return address
+    return reachable[0] if reachable else "127.0.0.1"
+
+
+def probe_url(listener: Listener) -> str:
+    """Where to ask this listener for a page, with an IPv6 address bracketed as a host."""
+    address = probe_address(listener.addresses)
+    host = f"[{address}]" if ":" in address else address
+    return f"http://{host}:{listener.port}/"
+
+
+async def probe_port(client: Client, listener: Listener) -> Probe:
     """
     Ask a port for a page, to tell a web server from a database socket.
 
@@ -105,7 +143,7 @@ async def probe_port(client: Client, port: int) -> Probe:
             request(
                 client,
                 "GET",
-                f"http://127.0.0.1:{port}/",
+                probe_url(listener),
                 headers=((b"user-agent", b"exe-dev-atlas"), (b"accept", b"text/html")),
             ) as (head, body),
         ):
@@ -118,6 +156,21 @@ async def probe_port(client: Client, port: int) -> Probe:
             )
     except OSError, TimeoutError, ValueError, h11.RemoteProtocolError:
         return Probe(is_http=False, status=None, title="", server="", attempts=1, at=now)
+
+
+def probe_interval(previous: Probe) -> timedelta:
+    """
+    How long a result stands before the port is worth asking again.
+
+    A port still climbing the retry ladder is one that has never answered, and it is asked
+    again quickly because the page is being watched while a server boots. Everything else, a
+    port that answered and one that has run out of attempts alike, moves to the slow cadence:
+    what a listener says is not fixed for its lifetime, and a server that took longer to come
+    up than the ladder allows still deserves another look eventually.
+    """
+    if not previous.is_http and previous.attempts < PROBE_MAX_ATTEMPTS:
+        return PROBE_RETRY
+    return PROBE_REFRESH
 
 
 class Probes:
@@ -174,13 +227,11 @@ class Probes:
         previous = self._results.get(key)
         if previous is None:
             return True
-        if previous.is_http:
-            return False
-        return previous.attempts < PROBE_MAX_ATTEMPTS and time.time() - previous.at >= PROBE_RETRY.total_seconds()
+        return time.time() - previous.at >= probe_interval(previous).total_seconds()
 
     async def _run(self, listener: Listener) -> None:
         key = (listener.port, listener.pid)
-        probe = await probe_port(self._client, listener.port)
+        probe = await probe_port(self._client, listener)
         previous = self._results.get(key)
         if previous is not None and not probe.is_http:
             probe = replace(probe, attempts=previous.attempts + 1)
