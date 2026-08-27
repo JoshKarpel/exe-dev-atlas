@@ -17,7 +17,7 @@ classifiers = [
     "Environment :: Web Environment",
     "Framework :: AsyncIO",
     "Intended Audience :: Developers",
-    # Linux only, and not incidentally: every listener fact comes from /proc and `ss`.
+    # Linux only, and not incidentally: every listener fact comes from /proc.
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
@@ -37,6 +37,7 @@ dependencies = [
     # a `GET /` in some other protocol is the ordinary case here rather than an exceptional one.
     "h11>=0.16",
     "typer>=0.27",
+    "psutil>=7",
 ]
 
 [project.scripts]
@@ -79,6 +80,7 @@ dev = [
     "mypy>=2.3.0",
     "ruff>=0.15.22",
     "pre-commit>=4.4",
+    "types-psutil>=7.2.2.20260518",
 ]
 
 [tool.pytest.ini_options]

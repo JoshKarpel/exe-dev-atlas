@@ -31,6 +31,13 @@ to that exemption list too, or the whole graph gets held back to a release preda
 reaches a caller as `h11.RemoteProtocolError`, which is the ordinary answer from a listener
 that is not a web server, so `probes` and `reflection` both catch it by name.
 
+[`psutil`](https://psutil.readthedocs.io/) is where every fact about a socket or a process
+comes from. Nothing shells out to `ss`, and the reason is worth keeping: its table has to be
+recovered from padded columns, `--json` is missing from builds as recent as iproute2 6.1, and
+it renders a wildcard bind as `*` on some builds and `[::]` on others, so `probe_address`
+would be matching on a rendering rather than on an address. psutil answers `0.0.0.0` and `::`.
+It ships no `py.typed`, so `types-psutil` is a dev dependency; keep the two versions in step.
+
 Python 3.14 only. The code uses unparenthesized multi-exception `except OSError, ValueError:`
 (PEP 758) in several places; that is valid 3.14 syntax, not the Python 2 bind form.
 
@@ -42,9 +49,12 @@ Python 3.14 only. The code uses unparenthesized multi-exception `except OSError,
 owner's email, the pre-rendered page `Response`) once, then binds `scan.scan_forever` to the
 server's lifetime with `background_task`. Handlers see nothing but the `Atlas`.
 
-`scan_once` reads the machine and publishes: `ss` for listeners, `/proc` for their processes,
-`zellij list-sessions` for session servers, gathered rather than awaited in turn so one hung
-session server does not hold every row behind its timeout. It serializes **two** JSON
+`scan_once` reads the machine and publishes: `read_listeners` for sockets, `read_process` for
+the processes behind them, `zellij list-sessions` for session servers, gathered rather than
+awaited in turn so one hung session server does not hold every row behind its timeout. The
+first two are synchronous inside an async loop on purpose: both are `/proc` reads, memory
+formatting with no device behind it to block on, and at a few milliseconds once a second
+`asyncio.to_thread` would cost more in dispatch than the reads take. It serializes **two** JSON
 payloads, a public one and an owner one carrying zellij session names and the VS Code link,
 and hands both to `Broadcast.publish`, which only bumps its version when the pair differs
 from the last. Both are built every scan even with no owner connected, because the diff is
@@ -52,18 +62,24 @@ against the pair.
 
 `scan_forever` is the cadence around it, and it must **not** die on a bad scan: nothing
 watches this task, so a page holding the last payload keeps its heartbeated connection and
-reads "live" over a listing that stopped moving. `ss` exiting non-zero is logged and the next
-scan retries; anything else is logged on the way out, since `background_task` surfaces a
-task's exception only when the server shuts down. `main.serve` configures logging to stderr,
-which under the unit is the journal (`just logs`).
+reads "live" over a listing that stopped moving. A `psutil.Error` is logged and the next scan
+retries; anything else is logged on the way out, since `background_task` surfaces a task's
+exception only when the server shuts down. `main.serve` configures logging to stderr, which
+under the unit is the journal (`just logs`).
+
+`read_listeners` is injected into `scan_once` and `scan_forever` as a `ReadListeners`
+callable, so a test drives a scan over a listing it wrote rather than over whatever this
+machine is running.
 
 Polling is deliberate, not a stopgap: the kernel offers no way to watch for a new listening
 socket.
 
-A row is one *listening process*, not one port: `parse_listeners` groups on `(port, pid)`, so
+A row is one *listening process*, not one port: `group_listeners` groups on `(port, pid)`, so
 one pid bound on IPv4 and IPv6 is one row while two processes sharing a port number are two.
 Anything keying rows by port alone (`atlas.js` looks its elements up by `port/pid`) collides
-the moment that happens.
+the moment that happens. A socket owned by another user arrives with `pid=None`, since its
+`/proc/<pid>/fd` is not ours to read, so several of those on one port do collapse into one
+row.
 
 Which payload a connection gets is decided in `app.events`, the only place holding the
 caller's headers. `app.is_owner` compares exe.dev's `x-exedev-email` header against the
@@ -78,7 +94,7 @@ public payload carries every command line on the box, which is the real reason i
 
 ### What must not cross the wire
 
-`listeners.Process` carries `executable` (from `/proc/<pid>/exe`), which `zellij.read_sessions`
+`listeners.Process` carries `executable` (the binary the process is running), which `zellij.read_sessions`
 needs to invoke the exact binary that is serving. `scan.build_row` deliberately drops it: a
 `Row` is serialized straight to every connected browser. Keep that split when adding fields.
 
@@ -110,11 +126,15 @@ both be described by whichever of them holds loopback, and a process bound only 
 address has nothing on loopback at all and would read as a web server that does not answer
 HTTP. A wildcard bind is asked on the loopback of its own family.
 
-A result stands only as long as `probe_interval` says. A `<title>`, a status and a `server`
+A result stands for `PROBE_INTERVAL`, whatever it said. A `<title>`, a status and a `server`
 are claims about the moment the probe ran, and the row around them updates every second, so a
 result held for the process's lifetime is stale in a way nothing on the page distinguishes
-from fresh. A port that has never answered stays on the fast retry ladder while a server
-boots; everything else, answered or given up on, is asked again on `PROBE_REFRESH`.
+from fresh. One flat cadence rather than a ladder that earns an answered port a slower one:
+`PROBE_TIMEOUT` is short enough that a dev server compiling a route on demand overruns it, and
+under a ladder that one slow answer both demoted a working server and then held it demoted for
+the length of the slow cadence. What the flat cadence costs is a request per listener per
+interval for as long as the page is up, which is why the interval is seconds rather than one
+scan.
 
 ### Install is convergence, not packaging
 
@@ -129,13 +149,21 @@ service manager.
 
 ### Functional core
 
-`parse_listeners`, `ticks_from_stat`, `parse_boot_epoch`, `build_row`, `Row.as_dict`,
-`is_owner`, `unit_text`, `is_zellij_web`, `format_probe_title`, `probe_address`, `probe_url`,
-`probe_interval`, and `page.shell` are pure and tested directly. The I/O shell around
-them is thin: `processes.run` returns a `Ran` value (a timeout and a cancellation both kill
-the child; a timeout is an outcome rather than an exception, and `.checked()` is the loud
-version), and reflection failures return empty values that every caller is written to treat
-as an honest "no answer".
+`group_listeners`, `build_row`, `Row.as_dict`, `is_owner`, `unit_text`, `is_zellij_web`,
+`format_probe_title`, `probe_address`, `probe_url`, and `page.shell` are pure and tested
+directly. The I/O shell around them is thin: `processes.run` returns a `Ran` value (a timeout
+and a cancellation both kill the child; a timeout is an outcome rather than an exception, and
+`.checked()` is the loud version), and reflection and process reads alike return empty values
+that every caller is written to treat as an honest "no answer".
+
+`read_listeners`, `read_process`, and `read_environ` are the psutil boundary, and nothing but
+`TestReadingThisMachine` pins the field names they ask for: those tests bind a real socket and
+read this very process, because a psutil release that renamed `laddr` or stopped answering
+`create_time` would leave every pure test green while the page rendered blank rows. The start
+time is asserted to be *stable across two reads*, which is the property the payload diff
+depends on: psutil derives it from `starttime` ticks plus `/proc/stat`'s `btime`, both
+integers the kernel settled, where `time.time()` minus `/proc/uptime` wanders across a 10ms
+band and republishes the whole payload once a second.
 
 ### Frontend
 

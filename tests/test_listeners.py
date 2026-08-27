@@ -1,37 +1,57 @@
 from __future__ import annotations
 
-import pytest
-from conftest import line
+import getpass
+import os
+import random
+import socket
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 
+import pytest
+
+from exe_dev_atlas.listeners import NO_PROCESS
+from exe_dev_atlas.listeners import ROUTED_PORTS
+from exe_dev_atlas.listeners import Binding
 from exe_dev_atlas.listeners import Listener
-from exe_dev_atlas.listeners import parse_boot_epoch
-from exe_dev_atlas.listeners import parse_listeners
-from exe_dev_atlas.listeners import ticks_from_stat
+from exe_dev_atlas.listeners import group_listeners
+from exe_dev_atlas.listeners import read_environ
+from exe_dev_atlas.listeners import read_listeners
+from exe_dev_atlas.listeners import read_process
+
+# High enough that nothing holds it, so every read about it comes back empty.
+ABSENT_PID = 4_194_303
+
+
+def bound(port: int, address: str = "127.0.0.1", pid: int | None = 4711) -> Binding:
+    """One listening socket, as the kernel reports it."""
+    return Binding(port=port, pid=pid, address=address)
 
 
 def test_a_single_listener_becomes_one_row_carrying_its_address_and_pid() -> None:
-    assert parse_listeners(line("127.0.0.1:3456", pid=8812)) == [
+    assert group_listeners([bound(3456, "127.0.0.1", 8812)]) == [
         Listener(port=3456, pid=8812, addresses=("127.0.0.1",))
     ]
 
 
 def test_the_same_port_bound_on_ipv4_and_ipv6_collapses_to_one_row() -> None:
-    output = "\n".join([line("0.0.0.0:4567", pid=9203), line("[::]:4567", pid=9203)])
+    bindings = [bound(4567, "0.0.0.0", 9203), bound(4567, "::", 9203)]
 
-    assert parse_listeners(output) == [Listener(port=4567, pid=9203, addresses=("0.0.0.0", "::"))]
+    assert group_listeners(bindings) == [Listener(port=4567, pid=9203, addresses=("0.0.0.0", "::"))]
 
 
 @pytest.mark.parametrize(
-    "local",
+    "port",
     [
-        pytest.param("127.0.0.1:22", id="ssh-below-the-range"),
-        pytest.param("127.0.0.1:2999", id="one-below-the-first-routed-port"),
-        pytest.param("127.0.0.1:10000", id="one-above-the-last-routed-port"),
-        pytest.param("127.0.0.1:54321", id="ephemeral-well-above-the-range"),
+        pytest.param(22, id="ssh-below-the-range"),
+        pytest.param(2999, id="one-below-the-first-routed-port"),
+        pytest.param(10000, id="one-above-the-last-routed-port"),
+        pytest.param(54321, id="ephemeral-well-above-the-range"),
     ],
 )
-def test_a_port_outside_the_proxied_range_is_dropped(local: str) -> None:
-    assert parse_listeners(line(local)) == []
+def test_a_port_outside_the_proxied_range_is_dropped(port: int) -> None:
+    assert group_listeners([bound(port)]) == []
 
 
 @pytest.mark.parametrize(
@@ -42,36 +62,25 @@ def test_a_port_outside_the_proxied_range_is_dropped(local: str) -> None:
     ],
 )
 def test_rows_come_back_sorted_by_port_whatever_order_they_arrived_in(first: int, second: int) -> None:
-    output = "\n".join([line(f"127.0.0.1:{second}", pid=101), line(f"127.0.0.1:{first}", pid=202)])
+    bindings = [bound(second, pid=101), bound(first, pid=202)]
 
-    assert [listener.port for listener in parse_listeners(output)] == [first, second]
+    assert [listener.port for listener in group_listeners(bindings)] == [first, second]
 
 
 def test_a_listener_whose_process_is_not_ours_to_see_still_becomes_a_row() -> None:
-    # `ss` omits the users:(...) column entirely for a socket owned by another user.
-    output = "LISTEN 0      4096   127.0.0.1:5432      0.0.0.0:*"
+    # A socket owned by another user arrives with no pid, because its `/proc/<pid>/fd` is not
+    # ours to read. The port is still real and still worth a row.
+    assert group_listeners([bound(5432, pid=None)]) == [Listener(port=5432, pid=None, addresses=("127.0.0.1",))]
 
-    assert parse_listeners(output) == [Listener(port=5432, pid=None, addresses=("127.0.0.1",))]
 
-
-@pytest.mark.parametrize(
-    "garbage",
-    [
-        pytest.param("", id="empty"),
-        pytest.param("\n\n", id="blank-lines"),
-        pytest.param("LISTEN 0 4096", id="too-few-columns"),
-        pytest.param("LISTEN 0 4096 127.0.0.1:notaport 0.0.0.0:*", id="non-numeric-port"),
-        pytest.param("Netid State Recv-Q Send-Q Local", id="a-header-that-slipped-through"),
-    ],
-)
-def test_a_line_that_is_not_a_listener_contributes_nothing(garbage: str) -> None:
-    assert parse_listeners(garbage) == []
+def test_nothing_listening_is_an_empty_listing_rather_than_an_error() -> None:
+    assert group_listeners([]) == []
 
 
 def test_one_process_bound_on_two_addresses_is_one_row_carrying_both() -> None:
-    output = "\n".join([line("127.0.0.1:7331", pid=55), line("192.168.1.9:7331", pid=55)])
+    bindings = [bound(7331, "127.0.0.1", 55), bound(7331, "192.168.1.9", 55)]
 
-    (listener,) = parse_listeners(output)
+    (listener,) = group_listeners(bindings)
     assert listener.addresses == ("127.0.0.1", "192.168.1.9")
 
 
@@ -80,68 +89,100 @@ def test_two_processes_sharing_a_port_number_stay_two_rows() -> None:
     # Merged on the port alone, the surviving row shows one process's address beside the
     # other's command line, working directory and user, and a session lookup runs against
     # the wrong pid.
-    output = "\n".join([line("127.0.0.1:3000", name="nodeapp", pid=111), line("192.168.1.5:3000", "otherapp", 222)])
+    bindings = [bound(3000, "127.0.0.1", 111), bound(3000, "192.168.1.5", 222)]
 
-    assert parse_listeners(output) == [
+    assert group_listeners(bindings) == [
         Listener(port=3000, pid=111, addresses=("127.0.0.1",)),
         Listener(port=3000, pid=222, addresses=("192.168.1.5",)),
     ]
 
 
 def test_rows_sharing_a_port_number_come_back_in_pid_order() -> None:
-    output = "\n".join([line("127.0.0.1:6060", pid=444), line("192.168.1.5:6060", pid=333)])
+    bindings = [bound(6060, "127.0.0.1", 444), bound(6060, "192.168.1.5", 333)]
 
-    assert [listener.pid for listener in parse_listeners(output)] == [333, 444]
+    assert [listener.pid for listener in group_listeners(bindings)] == [333, 444]
 
 
 def test_a_row_with_no_pid_sorts_ahead_of_the_named_processes_on_its_port() -> None:
     # A pid of None cannot be compared against a number, so this is the case that decides
     # whether the ordering is total at all.
-    output = "\n".join(["LISTEN 0 4096 127.0.0.1:7070 0.0.0.0:*", line("192.168.1.5:7070", pid=99)])
+    bindings = [bound(7070, "127.0.0.1", None), bound(7070, "192.168.1.5", 99)]
 
-    assert [listener.pid for listener in parse_listeners(output)] == [None, 99]
+    assert [listener.pid for listener in group_listeners(bindings)] == [None, 99]
 
 
-class TestStartTimeParsing:
-    def test_the_starttime_field_is_read_from_a_plain_stat_line(self) -> None:
-        fields = " ".join(str(n) for n in range(3, 22))
-        assert ticks_from_stat(f"7788 (server) S {fields}") == 21
+@contextmanager
+def listening_on_a_routed_port() -> Iterator[int]:
+    """A real listening socket on a port the proxy forwards, taken down with the test."""
+    with socket.socket() as held:
+        for port in random.sample(ROUTED_PORTS, 200):
+            try:
+                held.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            held.listen(1)
+            yield port
+            return
+    raise RuntimeError("nothing in the routed range was free to bind")
 
-    def test_a_command_name_containing_spaces_and_parens_does_not_shift_the_fields(self) -> None:
-        # The reason this parses from the *last* closing paren rather than splitting the line:
-        # `comm` is arbitrary bytes from the process, parentheses and all.
-        fields = " ".join(str(n) for n in range(3, 22))
-        assert ticks_from_stat(f"7788 (my (weird) name) S {fields}") == 21
+
+class TestReadingThisMachine:
+    """
+    What the kernel says about a socket and a process this test itself is holding.
+
+    Nothing else pins the field names psutil is asked for. The grouping above is pure and
+    tested against values written by hand, so a psutil release that renamed `laddr` or
+    stopped answering `create_time` would leave every one of those tests green while the
+    page rendered blank rows.
+    """
+
+    def test_a_socket_this_process_holds_is_found_with_this_process_named(self) -> None:
+        with listening_on_a_routed_port() as port:
+            found = [listener for listener in read_listeners() if listener.port == port]
+
+        assert found == [Listener(port=port, pid=os.getpid(), addresses=("127.0.0.1",))]
+
+    def test_a_socket_outside_the_routed_range_is_not_listed(self) -> None:
+        with socket.socket() as held:
+            held.bind(("127.0.0.1", 0))
+            held.listen(1)
+            ephemeral: int = held.getsockname()[1]
+
+            assert ephemeral not in ROUTED_PORTS
+            assert [listener for listener in read_listeners() if listener.port == ephemeral] == []
+
+    def test_this_process_describes_itself(self) -> None:
+        process = read_process(os.getpid())
+
+        assert process.command_name
+        assert process.command_line
+        assert process.user == getpass.getuser()
+        assert process.directory == str(Path.cwd())
+        assert Path(process.executable).exists()
+
+    def test_a_start_time_is_a_past_second_that_does_not_move_between_scans(self) -> None:
+        # The whole reason it is derived from the kernel's own boot second: a value that
+        # wanders re-publishes the entire payload and re-renders every client once a second.
+        first = read_process(os.getpid()).started_at
+        time.sleep(0.05)
+        second = read_process(os.getpid()).started_at
+
+        assert first == second
+        assert first is not None
+        assert 0 <= time.time() - first < 3600
+
+    def test_this_process_reports_the_environment_it_was_started_with(self) -> None:
+        assert "PATH" in read_environ(os.getpid())
 
     @pytest.mark.parametrize(
-        "stat",
+        "pid",
         [
-            pytest.param("", id="empty"),
-            pytest.param("7788 no-parens-here S 1 2 3", id="no-closing-paren"),
-            pytest.param("7788 (server) S 1 2 3", id="too-few-fields"),
-            pytest.param("7788 (server) S " + " ".join(["x"] * 25), id="non-numeric-fields"),
+            pytest.param(None, id="a-socket-with-no-process-to-ask-about"),
+            pytest.param(ABSENT_PID, id="a-pid-nothing-holds"),
         ],
     )
-    def test_a_stat_line_that_cannot_be_read_yields_nothing_rather_than_a_wrong_number(self, stat: str) -> None:
-        assert ticks_from_stat(stat) is None
+    def test_a_process_that_cannot_be_read_costs_blanks_rather_than_the_row(self, pid: int | None) -> None:
+        assert read_process(pid) == NO_PROCESS
 
-
-class TestBootEpochParsing:
-    def test_the_btime_field_is_read_from_among_the_others(self) -> None:
-        stat = "cpu  199 0 87 4212\nintr 90210\nbtime 1787145398\nprocesses 3401\n"
-
-        assert parse_boot_epoch(stat) == 1787145398
-
-    @pytest.mark.parametrize(
-        "stat",
-        [
-            pytest.param("", id="empty"),
-            pytest.param("cpu  199 0 87 4212\nintr 90210\n", id="no-btime-line"),
-            pytest.param("btime\n", id="btime-with-no-value"),
-            pytest.param("btime notanumber\n", id="btime-that-is-not-a-number"),
-        ],
-    )
-    def test_a_stat_file_carrying_no_readable_btime_yields_nothing(self, stat: str) -> None:
-        # Rather than a wrong epoch: every uptime on the page is derived from this, so a
-        # number guessed here is a wrong "up 3h" on every row.
-        assert parse_boot_epoch(stat) is None
+    def test_an_environment_that_cannot_be_read_is_empty_rather_than_an_error(self) -> None:
+        assert read_environ(ABSENT_PID) == {}

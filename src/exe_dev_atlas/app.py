@@ -35,7 +35,7 @@ from without_web import static_files
 from exe_dev_atlas import page
 from exe_dev_atlas import reflection
 from exe_dev_atlas.listeners import home_directory
-from exe_dev_atlas.listeners import socket_statistics_command
+from exe_dev_atlas.listeners import read_listeners
 from exe_dev_atlas.scan import Broadcast
 from exe_dev_atlas.scan import scan_forever
 
@@ -164,7 +164,6 @@ def build_app(port: int) -> ASGIApp:
     entry and cancels it on exit, so there is no thread to outlive a shutdown and no
     lifetime to manage by hand.
     """
-    socket_statistics = socket_statistics_command()
     router = build_router()
 
     @asynccontextmanager
@@ -185,7 +184,7 @@ def build_app(port: int) -> ASGIApp:
             scan = scan_forever(
                 atlas.broadcast,
                 pool,
-                socket_statistics,
+                read_listeners,
                 port,
                 vm,
                 reflection.vscode_url(vm.name, home_directory()),

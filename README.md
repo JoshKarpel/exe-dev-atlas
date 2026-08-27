@@ -97,9 +97,9 @@ chose the version; `install` only points systemd at it. To upgrade, upgrade the 
 run `install` again: an upgrade in place renders an identical unit, so the restart is what
 puts the new code in front of anything, and it happens whether the unit changed or not.
 
-The unit carries only a standard system `PATH`. `ss` is the one thing looked up on it; the
-zellij binary a session lookup runs is read from `/proc/<pid>/exe`, so it is the exact binary
-that is serving rather than whatever a lookup would find, and it needs no `PATH` entry.
+The unit carries only a standard system `PATH`, and nothing is looked up on it. The zellij
+binary a session lookup runs is read from the serving process itself, so it is the exact
+binary that is serving rather than whatever a lookup would find.
 
 `WantedBy=default.target` starts the unit when the *user manager* starts, which without
 `loginctl enable-linger <user>` is at first login rather than at boot. `install` checks this
@@ -108,9 +108,10 @@ file is correct, and nothing is running.
 
 ## Requirements
 
-Linux, Python 3.14, and `iproute2` for `ss`. Every listener fact comes from `ss` and `/proc`,
-so this is not portable off Linux, and the proxy's port range, its authentication header, and
-the reflection integration are all assumed to be exe.dev's.
+Linux and Python 3.14. Every listener fact comes from `/proc`, read through
+[psutil](https://psutil.readthedocs.io/), so this is not portable off Linux, and the proxy's
+port range, its authentication header, and the reflection integration are all assumed to be
+exe.dev's.
 
 ## Development
 

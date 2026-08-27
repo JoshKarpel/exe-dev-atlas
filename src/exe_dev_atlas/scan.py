@@ -3,23 +3,27 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Final
 
+import psutil
 from without_http import Client
 
 from exe_dev_atlas import zellij
 from exe_dev_atlas.listeners import Listener
-from exe_dev_atlas.listeners import NoSocketStatistics
 from exe_dev_atlas.listeners import Process
-from exe_dev_atlas.listeners import read_listeners
 from exe_dev_atlas.listeners import read_process
 from exe_dev_atlas.probes import Probe
 from exe_dev_atlas.probes import Probes
 from exe_dev_atlas.reflection import Vm
 
 SCAN_INTERVAL: Final = timedelta(seconds=1)
+
+# Injected rather than imported, so a test drives a scan over a listing it wrote instead of
+# over whatever this machine happens to be running.
+type ReadListeners = Callable[[], list[Listener]]
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +134,7 @@ class Broadcast:
 async def scan_once(
     broadcast: Broadcast,
     probes: Probes,
-    socket_statistics: str,
+    read_listeners: ReadListeners,
     own_port: int,
     vm: Vm,
     vscode_url: str,
@@ -142,11 +146,11 @@ async def scan_once(
     `publish` diffs against the last pair to decide whether there is news, and a pair built
     only sometimes would report a change every time the other half appeared.
     """
-    listeners = await read_listeners(socket_statistics)
+    listeners = read_listeners()
     probes.refresh(listeners)
 
-    # One `/proc` read per listener, held long enough to serve both the row and the zellij
-    # lookup below, which needs the executable path a row must not carry.
+    # One read per listener, held long enough to serve both the row and the zellij lookup
+    # below, which needs the executable path a row must not carry.
     scanned = [(listener, read_process(listener.pid)) for listener in listeners]
     rows = [build_row(listener, process, probes.get(listener)) for listener, process in scanned]
 
@@ -192,7 +196,7 @@ async def scan_once(
 async def scan_forever(
     broadcast: Broadcast,
     client: Client,
-    socket_statistics: str,
+    read_listeners: ReadListeners,
     own_port: int,
     vm: Vm,
     vscode_url: str,
@@ -200,19 +204,19 @@ async def scan_forever(
     """
     Rescan on a fixed cadence, for as long as the server this is bound to runs.
 
-    A scan that could not read the machine is logged and skipped rather than ending the
-    loop. `ss` exiting non-zero is a transient thing and the loop is already the retry, while
-    a scan task that dies takes nothing visible with it: the page holds the last payload it
-    was sent, the heartbeat keeps its connection open, and it reads "live" over a listing
-    that stopped moving. An unexpected failure still ends the scan, but says so on the way
-    out, because `background_task` surfaces it only when the server itself shuts down.
+    A scan that could not read the machine is logged and skipped rather than ending the loop.
+    A refused or vanished `/proc` entry is a transient thing and the loop is already the
+    retry, while a scan task that dies takes nothing visible with it: the page holds the last
+    payload it was sent, the heartbeat keeps its connection open, and it reads "live" over a
+    listing that stopped moving. An unexpected failure still ends the scan, but says so on the
+    way out, because `background_task` surfaces it only when the server itself shuts down.
     """
     probes = Probes(client)
     try:
         while True:
             try:
-                await scan_once(broadcast, probes, socket_statistics, own_port, vm, vscode_url)
-            except NoSocketStatistics as unreadable:
+                await scan_once(broadcast, probes, read_listeners, own_port, vm, vscode_url)
+            except psutil.Error as unreadable:
                 logger.warning(f"This scan read nothing and the last listing stands: {unreadable!r}")
             except Exception:
                 logger.exception("The scan loop is stopping, so the listing will not change again")

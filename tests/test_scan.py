@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import fields
-from pathlib import Path
 
+import psutil
 import pytest
-from conftest import line
 from without_http import ConnectionPool
 
+from exe_dev_atlas.listeners import Listener
 from exe_dev_atlas.probes import Probes
 from exe_dev_atlas.reflection import Vm
 from exe_dev_atlas.scan import Broadcast
@@ -21,7 +22,7 @@ VM = Vm(name="parrot", emoji="🦜")
 VSCODE_URL = "vscode://vscode-remote/ssh-remote+parrot.exe.xyz/home/pilot?windowId=_blank"
 OWN_PORT = 8123
 
-# High enough that no process holds it, so `/proc` answers nothing and the row carries the
+# High enough that no process holds it, so nothing answers about it and the row carries the
 # blanks a listener whose process could not be read renders with.
 ABSENT_PID = 4_194_303
 
@@ -114,26 +115,21 @@ def test_every_field_of_a_row_reaches_the_browser() -> None:
     assert set(row.as_dict()) == {field.name for field in fields(Row)}
 
 
-def fake_socket_statistics(tmp_path: Path, listing: str, exit_code: int = 0) -> str:
-    """A stand-in for `ss` that reports `listing` and exits however a test wants."""
-    command = tmp_path / "ss"
-    command.write_text(f"#!/bin/sh\ncat <<'LISTING'\n{listing}\nLISTING\nexit {exit_code}\n")
-    command.chmod(0o755)
-    return str(command)
+def listing(*listeners: Listener) -> Callable[[], list[Listener]]:
+    """A stand-in for the machine, reporting whatever listeners a test wants scanned."""
+    return lambda: list(listeners)
 
 
-async def test_a_scan_publishes_a_row_for_every_listener(tmp_path: Path, pool: ConnectionPool) -> None:
-    listing = "\n".join(
-        [
-            line("127.0.0.1:3456", name="server", pid=ABSENT_PID),
-            line("192.168.1.5:3456", name="other", pid=ABSENT_PID - 1),
-        ]
+async def test_a_scan_publishes_a_row_for_every_listener(pool: ConnectionPool) -> None:
+    found = listing(
+        Listener(port=3456, pid=ABSENT_PID - 1, addresses=("192.168.1.5",)),
+        Listener(port=3456, pid=ABSENT_PID, addresses=("127.0.0.1",)),
     )
     broadcast = Broadcast()
 
     probes = Probes(pool)
     try:
-        await scan_once(broadcast, probes, fake_socket_statistics(tmp_path, listing), OWN_PORT, VM, VSCODE_URL)
+        await scan_once(broadcast, probes, found, OWN_PORT, VM, VSCODE_URL)
     finally:
         await probes.aclose()
 
@@ -155,18 +151,20 @@ class Signalling(logging.Handler):
 
 
 async def test_a_scan_that_could_not_read_the_machine_says_so_and_scans_again(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture, pool: ConnectionPool
+    caplog: pytest.LogCaptureFixture, pool: ConnectionPool
 ) -> None:
     # The failure this guards against is silent and permanent: a scan task that dies leaves
     # the page holding its last payload, heartbeated, and reading "live" forever.
-    broken = fake_socket_statistics(tmp_path, "ss: cannot open netlink socket", exit_code=1)
+    def refuses() -> list[Listener]:
+        raise psutil.AccessDenied(pid=ABSENT_PID)
+
     broadcast = Broadcast()
     complained = asyncio.Event()
     logger = logging.getLogger("exe_dev_atlas.scan")
     handler = Signalling(complained)
     logger.addHandler(handler)
 
-    scanning = asyncio.ensure_future(scan_forever(broadcast, pool, broken, OWN_PORT, VM, VSCODE_URL))
+    scanning = asyncio.ensure_future(scan_forever(broadcast, pool, refuses, OWN_PORT, VM, VSCODE_URL))
     try:
         async with asyncio.timeout(5):
             await complained.wait()
@@ -178,7 +176,7 @@ async def test_a_scan_that_could_not_read_the_machine_says_so_and_scans_again(
 
     (complaint,) = caplog.records
     assert complaint.levelname == "WARNING"
-    assert "exited 1" in complaint.message
+    assert str(ABSENT_PID) in complaint.message
 
 
 async def test_a_change_only_the_owner_can_see_still_reaches_the_owner() -> None:

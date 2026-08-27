@@ -5,7 +5,6 @@ import html
 import re
 import time
 from dataclasses import dataclass
-from dataclasses import replace
 from datetime import timedelta
 from functools import partial
 from typing import Final
@@ -20,18 +19,15 @@ from without_http import request
 
 from exe_dev_atlas.listeners import Listener
 
-# A server can hold its port down before it answers on it, which is exactly the moment this
-# page is being watched. A port that did not respond is re-probed on this cadence until it
-# does, or until the attempts run out.
-PROBE_RETRY: Final = timedelta(seconds=5)
-PROBE_MAX_ATTEMPTS: Final = 6
 PROBE_TIMEOUT: Final = timedelta(seconds=1.5)
 
-# What a probe found is only true of the moment it ran: a dev server's `<title>` changes with
-# its index page, and one that starts answering 500s goes on reading "HTTP 200" until it is
-# asked again. Slow enough that a page of long-lived servers costs almost nothing, often
-# enough that the row is not describing what a process said days ago.
-PROBE_REFRESH: Final = timedelta(minutes=5)
+# Every listener is asked again on this cadence, whatever it said last time. A result is only
+# true of the moment it ran: a server holds its port down before it answers on it, a dev
+# server's `<title>` changes with its index page, and one that starts answering 500s goes on
+# reading "HTTP 200" until it is asked again. One flat interval rather than a ladder that
+# earns a port a slower cadence, because the ladder's own failure was a single slow answer
+# demoting a working server and then leaving it demoted for the length of the slow cadence.
+PROBE_INTERVAL: Final = timedelta(seconds=5)
 
 # A bind on a wildcard address accepts on every address this machine has, so the loopback of
 # the same family is the one to ask, and it is the address that cannot be firewalled away from
@@ -54,7 +50,6 @@ class Probe:
     status: int | None
     title: str
     server: str
-    attempts: int
     at: float
 
 
@@ -74,7 +69,7 @@ def describe_response(status: int, content_type: str, server: str, body: bytes, 
     title = ""
     if "html" in content_type.lower():
         title = format_probe_title(body.decode("utf-8", "replace"))
-    return Probe(is_http=True, status=status, title=title, server=server, attempts=1, at=at)
+    return Probe(is_http=True, status=status, title=title, server=server, at=at)
 
 
 async def read_beginning(body: ResponseBody, limit: int) -> bytes:
@@ -155,22 +150,7 @@ async def probe_port(client: Client, listener: Listener) -> Probe:
                 now,
             )
     except OSError, TimeoutError, ValueError, h11.RemoteProtocolError:
-        return Probe(is_http=False, status=None, title="", server="", attempts=1, at=now)
-
-
-def probe_interval(previous: Probe) -> timedelta:
-    """
-    How long a result stands before the port is worth asking again.
-
-    A port still climbing the retry ladder is one that has never answered, and it is asked
-    again quickly because the page is being watched while a server boots. Everything else, a
-    port that answered and one that has run out of attempts alike, moves to the slow cadence:
-    what a listener says is not fixed for its lifetime, and a server that took longer to come
-    up than the ladder allows still deserves another look eventually.
-    """
-    if not previous.is_http and previous.attempts < PROBE_MAX_ATTEMPTS:
-        return PROBE_RETRY
-    return PROBE_REFRESH
+        return Probe(is_http=False, status=None, title="", server="", at=now)
 
 
 class Probes:
@@ -227,12 +207,7 @@ class Probes:
         previous = self._results.get(key)
         if previous is None:
             return True
-        return time.time() - previous.at >= probe_interval(previous).total_seconds()
+        return time.time() - previous.at >= PROBE_INTERVAL.total_seconds()
 
     async def _run(self, listener: Listener) -> None:
-        key = (listener.port, listener.pid)
-        probe = await probe_port(self._client, listener)
-        previous = self._results.get(key)
-        if previous is not None and not probe.is_http:
-            probe = replace(probe, attempts=previous.attempts + 1)
-        self._results[key] = probe
+        self._results[(listener.port, listener.pid)] = await probe_port(self._client, listener)

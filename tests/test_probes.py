@@ -6,7 +6,6 @@ from collections.abc import AsyncGenerator
 from collections.abc import AsyncIterator
 from collections.abc import Awaitable
 from collections.abc import Callable
-from datetime import timedelta
 from typing import Protocol
 
 import pytest
@@ -15,15 +14,10 @@ from without_http import ResponseBody
 from without_http import ResponseTrailers
 
 from exe_dev_atlas.listeners import Listener
-from exe_dev_atlas.probes import PROBE_MAX_ATTEMPTS
 from exe_dev_atlas.probes import PROBE_MAX_BYTES
-from exe_dev_atlas.probes import PROBE_REFRESH
-from exe_dev_atlas.probes import PROBE_RETRY
-from exe_dev_atlas.probes import Probe
 from exe_dev_atlas.probes import describe_response
 from exe_dev_atlas.probes import format_probe_title
 from exe_dev_atlas.probes import probe_address
-from exe_dev_atlas.probes import probe_interval
 from exe_dev_atlas.probes import probe_port
 from exe_dev_atlas.probes import probe_url
 from exe_dev_atlas.probes import read_beginning
@@ -41,7 +35,7 @@ class Listen(Protocol):
 
 
 def bound(port: int, *addresses: str, pid: int = 7788) -> Listener:
-    """A listener holding `port` on the addresses given, as `parse_listeners` would report it."""
+    """A listener holding `port` on the addresses given, as `group_listeners` would report it."""
     return Listener(port=port, pid=pid, addresses=addresses or ("127.0.0.1",))
 
 
@@ -117,9 +111,6 @@ class TestDescribeResponse:
 
         assert probe.is_http is True
         assert probe.status == status
-
-    def test_a_fresh_probe_records_one_attempt(self) -> None:
-        assert describe_response(200, "text/html", "", b"", PROBED_AT).attempts == 1
 
 
 async def chunked(*items: bytes) -> AsyncGenerator[bytes | ResponseTrailers]:
@@ -235,28 +226,6 @@ class TestChoosingWhereToAsk:
         self, addresses: tuple[str, ...], expected: str
     ) -> None:
         assert probe_url(bound(4321, *addresses)) == expected
-
-
-class TestWhenAPortIsWorthAskingAgain:
-    def test_a_port_that_has_never_answered_is_asked_again_quickly(self) -> None:
-        never = Probe(is_http=False, status=None, title="", server="", attempts=2, at=PROBED_AT)
-
-        assert probe_interval(never) == PROBE_RETRY
-
-    def test_a_port_that_answered_is_asked_again_on_the_slow_cadence(self) -> None:
-        # Otherwise the title, status and server a process gave in its first second and a half
-        # stand for as long as it runs, on a page that says it updates live.
-        answered = Probe(is_http=True, status=200, title="Grafana", server="caddy", attempts=1, at=PROBED_AT)
-
-        assert probe_interval(answered) == PROBE_REFRESH
-
-    def test_a_port_that_ran_out_of_attempts_falls_back_to_the_slow_cadence(self) -> None:
-        given_up = Probe(is_http=False, status=None, title="", server="", attempts=PROBE_MAX_ATTEMPTS, at=PROBED_AT)
-
-        assert probe_interval(given_up) == PROBE_REFRESH
-
-    def test_the_slow_cadence_is_slower_than_the_retry_ladder(self) -> None:
-        assert PROBE_REFRESH > PROBE_RETRY > timedelta(0)
 
 
 class TestProbingARealListener:

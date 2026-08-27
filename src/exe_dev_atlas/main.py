@@ -27,7 +27,6 @@ from exe_dev_atlas.install import is_lingering
 from exe_dev_atlas.install import running_executable
 from exe_dev_atlas.install import systemctl_for
 from exe_dev_atlas.install import unit_path
-from exe_dev_atlas.listeners import NoSocketStatistics
 
 # What exe.dev's proxy points the bare `https://<vm>.exe.xyz/` hostname at, which is the
 # whole reason this program has a default port at all: served here, the box's front door is
@@ -55,11 +54,7 @@ exe_dev_atlas = typer.Typer(
 def serve(port: Port = DEFAULT_PORT) -> None:
     """Run the atlas in the foreground, until a signal stops it."""
     start_logging()
-    try:
-        app.serve_until_stopped(port)
-    except NoSocketStatistics as missing:
-        typer.echo(str(missing), err=True)
-        raise typer.Exit(1) from None
+    app.serve_until_stopped(port)
 
 
 @exe_dev_atlas.command()

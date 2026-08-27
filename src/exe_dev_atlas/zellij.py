@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Final
 
-from exe_dev_atlas.listeners import read_entry
+from exe_dev_atlas.listeners import read_environ
 from exe_dev_atlas.processes import run
 
 # The scan runs once a second, so a lookup that takes longer than this is one whose answer
@@ -33,22 +33,12 @@ def is_zellij_web(command_name: str, command_line: str) -> bool:
     return command_name == "zellij" and " web " in f" {command_line} "
 
 
-def read_environ(pid: int) -> dict[str, str]:
-    """The environment a running process was started with, or {} if it cannot be read."""
-    environ = {}
-    for entry in read_entry(pid, "environ").split("\0"):
-        key, _, value = entry.partition("=")
-        if key:
-            environ[key] = value
-    return environ
-
-
 async def read_sessions(pid: int | None, executable: str) -> tuple[str, ...]:
     """
     Session names a zellij web server can serve, newest listing first.
 
     Both halves of this come from the server's own process rather than from ours. The
-    `executable` is the binary at `/proc/<pid>/exe`, so the exact zellij that is serving is
+    `executable` is the binary that process is running, so the exact zellij that is serving is
     the one asked, and no PATH lookup in this daemon's environment has to find a matching
     one. The socket directory comes from that process's environment, because a daemon and a
     login shell derive it differently and asking our own would enumerate a different
