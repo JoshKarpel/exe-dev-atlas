@@ -11,8 +11,16 @@ permissions:
   contents: read
 
 jobs:
-  pre-commit:
-    name: Pre-commit
+  check:
+    name: Check
+    # Linux only, and not incidentally: every listener fact comes from `/proc`, and
+    # `TestReadingThisMachine` binds a real socket and reads this very process. There is
+    # nothing here that a macOS or Windows runner could run a meaningful version of.
+    #
+    # One job rather than two, because that single platform is also a single toolchain and a
+    # single locked environment: split, the two would spend more wall-clock checking out and
+    # syncing in parallel than they save by running that way, and each failure would be
+    # reported against a separate checkout of the same commit.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -26,22 +34,6 @@ jobs:
 
       - name: Run pre-commit checks
         run: uv run pre-commit run --all-files --show-diff-on-failure --color=always
-
-  test:
-    name: Test
-    # Linux only, and not incidentally: every listener fact comes from `/proc`, and
-    # `TestReadingThisMachine` binds a real socket and reads this very process. There is
-    # nothing here that a macOS or Windows runner could run a meaningful version of.
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up toolchain
-        uses: ./.github/actions/setup
 
       - name: Run type checking and tests
         run: just test --durations 20 -vvv
