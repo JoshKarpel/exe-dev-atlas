@@ -9,11 +9,14 @@ are live and what is on them. The atlas serves that list on the port the bare ho
 at, so `https://<vm>.exe.xyz/` becomes a launcher for everything else on the box, alongside
 the zellij sessions that have no port of their own.
 
+<!-- Absolute rather than repository-relative, because PyPI renders this file too: its renderer
+     leaves a relative `src` alone, so the browser resolves it against pypi.org and gets a 404,
+     and it strips the `<source>`, so the PyPI page shows the light shot either way. -->
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/JoshKarpel/exe-dev-atlas/main/docs/screenshot-dark.png">
   <img alt="One row per listening process, each carrying the port, the title the port served,
   the working directory, the command line, and the uptime, under a VS Code link"
-  src="docs/screenshot-light.png">
+  src="https://raw.githubusercontent.com/JoshKarpel/exe-dev-atlas/main/docs/screenshot-light.png">
 </picture>
 
 ## Install

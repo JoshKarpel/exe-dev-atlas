@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "A front door for an exe.dev VM: what is listening, what it is, and what to open."
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Josh Karpel", email = "josh.karpel@gmail.com" },
 ]
