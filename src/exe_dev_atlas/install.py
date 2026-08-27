@@ -42,7 +42,7 @@ Type=exec
 # and handed an environment of its own rather than this one. It is here as an ordinary
 # default for anything that does inherit the unit's environment.
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart={executable} -m exe_dev_atlas serve --port {port}
+ExecStart={executable} -m exe_dev_atlas serve --port {port} {vscode_flag}
 Restart=always
 RestartSec=5
 
@@ -72,8 +72,21 @@ def unit_path(config_home: Path) -> Path:
     return config_home / "systemd" / "user" / f"{SERVICE}.service"
 
 
-def unit_text(executable: Path, port: int) -> str:
-    return UNIT.format(executable=executable, port=port)
+def unit_text(executable: Path, port: int, *, vscode_link: bool) -> str:
+    """
+    The unit as this installation would have it, with every setting named either way.
+
+    The VS Code flag is rendered in both directions rather than appended only when the link
+    is off, so the installed unit is a record of what was asked for rather than a record of
+    one half of it: `--vs-code-link` says the link is on now and keeps saying it if the
+    command's default ever moves, where an absent flag would quietly start meaning the
+    opposite.
+    """
+    return UNIT.format(
+        executable=executable,
+        port=port,
+        vscode_flag="--vs-code-link" if vscode_link else "--no-vs-code-link",
+    )
 
 
 class NoInterpreter(RuntimeError):
@@ -148,16 +161,16 @@ async def is_lingering(user: str) -> bool:
     return shown.ok and shown.stdout.strip().endswith("=yes")
 
 
-async def converge(executable: Path, unit: Path, port: int, systemctl: Systemctl) -> Converged:
+async def converge(executable: Path, unit: Path, port: int, systemctl: Systemctl, *, vscode_link: bool) -> Converged:
     """
     Make this machine's service match this interpreter: the unit file, and the code it runs.
 
     Comparing the unit text is not enough, and the reading that stops there is wrong in the
-    worst way available. The text is a function of an interpreter path and a port, so an
-    upgrade in place (which is what `uv tool upgrade` does) renders identically, and an
-    install that reloaded and restarted only on a difference would report success while
-    leaving the old code serving: it says the unit is already current, which is true, and a
-    reader takes it for a statement about the process.
+    worst way available. The text is a function of an interpreter path and the settings
+    `serve` was asked for, so an upgrade in place (which is what `uv tool upgrade` does)
+    renders identically, and an install that reloaded and restarted only on a difference
+    would report success while leaving the old code serving: it says the unit is already
+    current, which is true, and a reader takes it for a statement about the process.
 
     So the restart is unconditional and the reload is not: the manager needs re-reading only
     when the file it read has changed.
@@ -170,7 +183,7 @@ async def converge(executable: Path, unit: Path, port: int, systemctl: Systemctl
     `--now`: `restart` starts a loaded unit that is not running, so a second way of starting
     it would be redundant.
     """
-    changed = write_unit(unit, unit_text(executable, port))
+    changed = write_unit(unit, unit_text(executable, port, vscode_link=vscode_link))
     if changed:
         (await systemctl(("daemon-reload",))).checked()
 

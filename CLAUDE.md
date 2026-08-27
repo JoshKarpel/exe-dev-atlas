@@ -169,6 +169,11 @@ never fetches or builds an environment. In `converge`, the `daemon-reload` is co
 the unit text changing but the `restart` is **unconditional**: an upgrade in place renders
 identical text, so the restart is the only thing that puts new code in front of anything.
 
+`WantedBy=default.target` starts the unit when the *user manager* starts, which without
+`loginctl enable-linger <user>` is at first login rather than at boot. `install` checks this
+and says so if it is off, because the failure is otherwise invisible: the unit is enabled, the
+file is correct, and nothing is running.
+
 `systemctl` is injected as a `Systemctl` callable so tests drive convergence without a
 service manager.
 
@@ -196,6 +201,14 @@ band and republishes the whole payload once a second.
 `location.hostname`, so they stay correct through the exe.dev proxy or an SSH tunnel alike.
 The one exception is the VS Code Remote-SSH link, built server-side from the reflection VM
 name because it names a host to SSH to rather than one to fetch from.
+
+The `+ new session` link on a zellij web server's row is the only thing the page offers that
+creates something rather than pointing at what is already running, and both halves of keeping
+that honest live in `atlas.js`: it is never passed to `offer`, so none of the `1`-`9` digits
+reach it, and the row's own anchor stays inert as before. Its owner-only-ness is decided by
+the *presence* of `row.sessions` rather than its length, because a server serving nothing
+still hands the owner an empty list, and that is exactly the row the link is there for. So
+`scan_once` must keep emitting the key for every session server, empty tuple included.
 
 `page.py` server-renders only a constant shell (element ids the script looks up, two asset
 links). `app.build_router` serves `static/` from an `inventory` walked once at startup, so

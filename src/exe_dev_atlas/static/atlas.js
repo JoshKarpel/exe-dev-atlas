@@ -35,9 +35,23 @@ function linkFor(row, ownPort) {
   if (row.is_http === false || row.port === ownPort) return null;
   // A zellij web server creates a brand new session for anyone arriving without
   // one named in the path, so linking its root would litter the box with an
-  // empty session per visit. The per-session links below are the way in.
+  // empty session per visit. The chips below are the way in: the existing
+  // sessions, and one link that asks for a new one on purpose.
   if (row.is_session_server) return null;
   return urlFor(row.port, "");
+}
+
+// The one link on the page that acts on the box rather than pointing at
+// something already on it, since arriving at a zellij web server's root creates
+// a session. That is why it is drawn as an action rather than a destination and
+// is never handed to `offer`: a session collected by a stray digit or a misclick
+// on the row stays on the box until somebody clears it from a shell.
+function newSessionLink(port) {
+  const link = document.createElement("a");
+  link.className = "session create";
+  link.href = urlFor(port, "");
+  link.textContent = "+ new session";
+  return link;
 }
 
 // One port number can carry two rows: two processes bound to it on different
@@ -205,22 +219,28 @@ function render(payload) {
     });
 
     // Sessions arrive only for the VM's owner, so this is absent rather than
-    // empty for everyone else and the row renders as any other port would.
+    // empty for everyone else and the row renders as any other port would. The
+    // list can be empty where the server is serving none, which is the case the
+    // new-session link exists for, so the presence of the field rather than its
+    // length is what decides whether the owner gets these at all.
     const sessions = li.querySelector(".sessions");
     sessions.innerHTML = "";
-    (row.sessions || []).forEach((name) => {
-      const link = document.createElement("a");
-      link.className = "session";
-      link.href = urlFor(row.port, encodeURIComponent(name));
-      const key = document.createElement("span");
-      key.className = "key";
-      key.textContent = offer(link.href);
-      link.appendChild(key);
-      const label = document.createElement("span");
-      label.textContent = name;
-      link.appendChild(label);
-      sessions.appendChild(link);
-    });
+    if (row.sessions) {
+      row.sessions.forEach((name) => {
+        const link = document.createElement("a");
+        link.className = "session";
+        link.href = urlFor(row.port, encodeURIComponent(name));
+        const key = document.createElement("span");
+        key.className = "key";
+        key.textContent = offer(link.href);
+        link.appendChild(key);
+        const label = document.createElement("span");
+        label.textContent = name;
+        link.appendChild(label);
+        sessions.appendChild(link);
+      });
+      sessions.appendChild(newSessionLink(row.port));
+    }
 
     // Appending an attached node *moves* it, so doing this unconditionally would tear
     // down and rebuild the whole list once a second. The rows above are updated field by

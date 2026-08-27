@@ -156,13 +156,17 @@ async def _not_found(_atlas: Atlas) -> Response:
     return NOT_FOUND
 
 
-def build_app(port: int) -> ASGIApp:
+def build_app(port: int, *, vscode_link: bool = True) -> ASGIApp:
     """
     The ASGI app, with the scan loop bound to its lifespan.
 
     The scan runs for exactly as long as the server does: `background_task` starts it on
     entry and cancels it on exit, so there is no thread to outlive a shutdown and no
     lifetime to manage by hand.
+
+    Whether to offer the VS Code link is settled here rather than carried any further in:
+    the scan loop is handed a URL and an empty one is already how it says there is no link
+    to offer, which is what a reflection lookup that did not answer produces anyway.
     """
     router = build_router()
 
@@ -187,7 +191,7 @@ def build_app(port: int) -> ASGIApp:
                 read_listeners,
                 port,
                 vm,
-                reflection.vscode_url(vm.name, home_directory()),
+                reflection.vscode_url(vm.name, home_directory()) if vscode_link else "",
             )
             async with background_task(scan):
                 yield atlas
@@ -195,14 +199,14 @@ def build_app(port: int) -> ASGIApp:
     return make_asgi_app(lifespan, http=router.dispatch)
 
 
-async def serve(port: int, host: str = "127.0.0.1") -> None:
+async def serve(port: int, host: str = "127.0.0.1", *, vscode_link: bool = True) -> None:
     """Run until cancelled, which for the CLI means until a signal stops the process."""
-    async with serving(build_app(port), host=host, port=port):
+    async with serving(build_app(port, vscode_link=vscode_link), host=host, port=port):
         await sleep_forever()
 
 
-def serve_until_stopped(port: int, host: str = "127.0.0.1") -> None:
+def serve_until_stopped(port: int, host: str = "127.0.0.1", *, vscode_link: bool = True) -> None:
     try:
-        asyncio.run(serve(port, host))
+        asyncio.run(serve(port, host, vscode_link=vscode_link))
     except KeyboardInterrupt:
         return

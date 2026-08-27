@@ -43,6 +43,17 @@ Port = Annotated[
     ),
 ]
 
+# Rendered into the unit either way, so an install records the choice rather than inheriting
+# whatever this command's default happens to be at the time (see `install.unit_text`).
+VsCodeLink = Annotated[
+    bool,
+    typer.Option(
+        "--vs-code-link/--no-vs-code-link",
+        envvar="EXE_DEV_ATLAS_VS_CODE_LINK",
+        help="offer the VS Code Remote-SSH link under the header, which only the VM's owner is served",
+    ),
+]
+
 exe_dev_atlas = typer.Typer(
     help="Serve an index of this VM's ports, sessions, and workspaces, or install it on this machine.",
     no_args_is_help=True,
@@ -51,14 +62,14 @@ exe_dev_atlas = typer.Typer(
 
 
 @exe_dev_atlas.command()
-def serve(port: Port = DEFAULT_PORT) -> None:
+def serve(port: Port = DEFAULT_PORT, vscode_link: VsCodeLink = True) -> None:
     """Run the atlas in the foreground, until a signal stops it."""
     start_logging()
-    app.serve_until_stopped(port)
+    app.serve_until_stopped(port, vscode_link=vscode_link)
 
 
 @exe_dev_atlas.command()
-def install(port: Port = DEFAULT_PORT) -> None:
+def install(port: Port = DEFAULT_PORT, vscode_link: VsCodeLink = True) -> None:
     """
     Converge this machine's user systemd unit and restart the atlas onto this interpreter.
 
@@ -92,7 +103,7 @@ def install(port: Port = DEFAULT_PORT) -> None:
     unit = unit_path(config_home(os.environ))
     systemctl = systemctl_for(os.environ)
 
-    converged = asyncio.run(converge(executable, unit, port, systemctl))
+    converged = asyncio.run(converge(executable, unit, port, systemctl, vscode_link=vscode_link))
     _report(converged, executable, port)
 
     if not asyncio.run(is_lingering(getpass.getuser())):

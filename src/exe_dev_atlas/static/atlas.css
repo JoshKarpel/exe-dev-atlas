@@ -79,6 +79,11 @@ li.inert .port { color: var(--dim); }
 }
 .session:hover { border-color: var(--accent); }
 .session .key { width: auto; }
+/* Every other chip goes to a session that is already running; this one starts
+   one. Outlined rather than filled, and carrying no hotkey digit, so it does not
+   read as another destination sitting in the same row. */
+.session.create { background: none; border-color: var(--line); border-style: dashed; color: var(--dim); }
+.session.create:hover { border-color: var(--accent); color: var(--accent); }
 #empty { color: var(--dim); padding: 2rem 0; text-align: center; }
 footer { margin-top: 1.5rem; font-size: .75rem; color: var(--dim); }
 kbd {

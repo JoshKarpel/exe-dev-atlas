@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **A way to start a zellij session from the page.** A `+ new session` link sits beside the
+  session list on a zellij web server's row, for the VM's owner alone, and appears even where
+  the server is serving no sessions at all, which is the case that previously dead-ended. It
+  is the one link on the page that acts on the box rather than pointing at something already
+  running on it, so it is drawn as an action rather than a destination and takes none of the
+  `1`-`9` digits: a session is created by a click that meant it, never by a stray keypress on
+  the row.
+
+- **A way to turn the VS Code link off.** `serve` and `install` both take
+  `--vs-code-link/--no-vs-code-link`, default on, and an install renders whichever was asked
+  for into the unit's `ExecStart`, so the unit states the choice rather than inheriting the
+  command's default. With the link off the owner's payload carries an empty `vscode_url`,
+  which is already how a VM whose reflection lookup did not answer says there is no link to
+  offer, so the header renders the same either way.
+
 ## 0.1.0
 
 ### Added

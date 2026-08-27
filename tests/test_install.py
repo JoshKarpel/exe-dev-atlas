@@ -48,7 +48,7 @@ class TestUnitText:
         # The module rather than a console script: `sys.executable` is always absolute and
         # always holds the package, while a console-script shim can be relocated out from
         # under the unit.
-        text = unit_text(INTERPRETER, PORT)
+        text = unit_text(INTERPRETER, PORT, vscode_link=True)
 
         assert f"ExecStart={INTERPRETER} -m exe_dev_atlas serve --port {PORT}" in text
 
@@ -56,7 +56,9 @@ class TestUnitText:
         # A user unit inherits none of a login shell's PATH, so a child that does look
         # something up on it would otherwise find nothing at all.
         path_line = next(
-            line for line in unit_text(INTERPRETER, PORT).splitlines() if line.startswith("Environment=PATH=")
+            line
+            for line in unit_text(INTERPRETER, PORT, vscode_link=True).splitlines()
+            if line.startswith("Environment=PATH=")
         )
         entries = path_line.removeprefix("Environment=PATH=").split(":")
 
@@ -64,7 +66,7 @@ class TestUnitText:
         assert "/bin" in entries
 
     def test_the_unit_restarts_itself_so_a_scan_thread_dying_is_not_terminal(self) -> None:
-        text = unit_text(INTERPRETER, PORT)
+        text = unit_text(INTERPRETER, PORT, vscode_link=True)
 
         assert "Restart=always" in text
         assert "WantedBy=default.target" in text
@@ -72,7 +74,18 @@ class TestUnitText:
     def test_two_ports_render_differently(self) -> None:
         # The guard on `converge` writing only when the text differs: if the port were
         # dropped from the rendering, changing it would silently converge onto the old one.
-        assert unit_text(INTERPRETER, 8123) != unit_text(INTERPRETER, 9001)
+        assert unit_text(INTERPRETER, 8123, vscode_link=True) != unit_text(INTERPRETER, 9001, vscode_link=True)
+
+    @pytest.mark.parametrize(
+        ("vscode_link", "flag"),
+        [pytest.param(True, "--vs-code-link", id="on"), pytest.param(False, "--no-vs-code-link", id="off")],
+    )
+    def test_the_unit_states_which_way_the_vs_code_link_was_asked_for(self, vscode_link: bool, flag: str) -> None:
+        # Named either way rather than only when withheld, so the unit records the choice
+        # instead of leaning on whatever `serve` defaults to when it is next started.
+        text = unit_text(INTERPRETER, PORT, vscode_link=vscode_link)
+
+        assert f"ExecStart={INTERPRETER} -m exe_dev_atlas serve --port {PORT} {flag}" in text
 
 
 class TestRunningExecutable:
@@ -131,18 +144,18 @@ class TestConverge:
         unit = unit_path(tmp_path)
         systemctl = FakeSystemctl()
 
-        converged = await converge(INTERPRETER, unit, PORT, systemctl)
+        converged = await converge(INTERPRETER, unit, PORT, systemctl, vscode_link=True)
 
         assert converged.unit_changed is True
-        assert unit.read_text() == unit_text(INTERPRETER, PORT)
+        assert unit.read_text() == unit_text(INTERPRETER, PORT, vscode_link=True)
         assert systemctl.verbs == ["daemon-reload", "enable", "restart"]
 
     async def test_an_unchanged_unit_is_not_rewritten_and_the_manager_is_not_reloaded(self, tmp_path: Path) -> None:
         unit = unit_path(tmp_path)
-        await converge(INTERPRETER, unit, PORT, FakeSystemctl())
+        await converge(INTERPRETER, unit, PORT, FakeSystemctl(), vscode_link=True)
 
         systemctl = FakeSystemctl()
-        converged = await converge(INTERPRETER, unit, PORT, systemctl)
+        converged = await converge(INTERPRETER, unit, PORT, systemctl, vscode_link=True)
 
         assert converged.unit_changed is False
         assert "daemon-reload" not in systemctl.verbs
@@ -152,47 +165,61 @@ class TestConverge:
         # identical unit, so only the restart puts the new code in front of anything. A
         # difference-gated restart would report success while serving the old build.
         unit = unit_path(tmp_path)
-        await converge(INTERPRETER, unit, PORT, FakeSystemctl())
+        await converge(INTERPRETER, unit, PORT, FakeSystemctl(), vscode_link=True)
 
         systemctl = FakeSystemctl()
-        await converge(INTERPRETER, unit, PORT, systemctl)
+        await converge(INTERPRETER, unit, PORT, systemctl, vscode_link=True)
 
         assert systemctl.verbs == ["enable", "restart"]
 
     async def test_changing_the_port_rewrites_the_unit_and_reloads(self, tmp_path: Path) -> None:
         unit = unit_path(tmp_path)
-        await converge(INTERPRETER, unit, 8123, FakeSystemctl())
+        await converge(INTERPRETER, unit, 8123, FakeSystemctl(), vscode_link=True)
 
         systemctl = FakeSystemctl()
-        converged = await converge(INTERPRETER, unit, 9001, systemctl)
+        converged = await converge(INTERPRETER, unit, 9001, systemctl, vscode_link=True)
 
         assert converged.unit_changed is True
         assert "--port 9001" in unit.read_text()
         assert systemctl.verbs == ["daemon-reload", "enable", "restart"]
 
+    async def test_withdrawing_the_vs_code_link_rewrites_the_unit_and_reloads(self, tmp_path: Path) -> None:
+        # `install --no-vs-code-link` on a machine already running with the link is the whole
+        # way the flag reaches the service, so a rendering that dropped it would report a
+        # successful install and go on serving the link.
+        unit = unit_path(tmp_path)
+        await converge(INTERPRETER, unit, PORT, FakeSystemctl(), vscode_link=True)
+
+        systemctl = FakeSystemctl()
+        converged = await converge(INTERPRETER, unit, PORT, systemctl, vscode_link=False)
+
+        assert converged.unit_changed is True
+        assert "--no-vs-code-link" in unit.read_text()
+        assert systemctl.verbs == ["daemon-reload", "enable", "restart"]
+
     async def test_changing_the_interpreter_rewrites_the_unit(self, tmp_path: Path) -> None:
         unit = unit_path(tmp_path)
-        await converge(INTERPRETER, unit, PORT, FakeSystemctl())
+        await converge(INTERPRETER, unit, PORT, FakeSystemctl(), vscode_link=True)
 
         moved = Path("/opt/other/bin/python")
-        converged = await converge(moved, unit, PORT, FakeSystemctl())
+        converged = await converge(moved, unit, PORT, FakeSystemctl(), vscode_link=True)
 
         assert converged.unit_changed is True
         assert str(moved) in unit.read_text()
 
     async def test_enabling_is_unconditional_so_an_unenabled_unit_is_always_fixed(self, tmp_path: Path) -> None:
         unit = unit_path(tmp_path)
-        await converge(INTERPRETER, unit, PORT, FakeSystemctl())
+        await converge(INTERPRETER, unit, PORT, FakeSystemctl(), vscode_link=True)
 
         systemctl = FakeSystemctl()
-        await converge(INTERPRETER, unit, PORT, systemctl)
+        await converge(INTERPRETER, unit, PORT, systemctl, vscode_link=True)
 
         assert ("enable", SERVICE) in systemctl.calls
 
     async def test_the_parent_directory_is_created_when_it_does_not_exist(self, tmp_path: Path) -> None:
         unit = unit_path(tmp_path / "never" / "existed")
 
-        await converge(INTERPRETER, unit, PORT, FakeSystemctl())
+        await converge(INTERPRETER, unit, PORT, FakeSystemctl(), vscode_link=True)
 
         assert unit.is_file()
 
@@ -205,4 +232,4 @@ class TestConverge:
         unit = unit_path(tmp_path)
 
         with pytest.raises(Exception, match="exited 1"):
-            await converge(INTERPRETER, unit, PORT, FakeSystemctl(fails=verb))
+            await converge(INTERPRETER, unit, PORT, FakeSystemctl(fails=verb), vscode_link=True)
