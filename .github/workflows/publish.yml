@@ -1,0 +1,45 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: pypi
+      url: https://pypi.org/p/exe-dev-atlas
+    permissions:
+      id-token: write # trusted publishing exchanges this OIDC token for a PyPI upload credential
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Caching is off here although it is on in the CI setup action, and the asymmetry is
+      # the point: this job builds the artifact uploaded to PyPI under this repository's
+      # name, and a cache entry is writable by anyone who can open a pull request. `false`
+      # rather than an omitted key, because setup-uv caches by default.
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: false
+
+      # The version is whatever `pyproject.toml` says, so a release is cut by bumping that
+      # field and then tagging the commit carrying it. Nothing here reads the tag, and
+      # nothing checks the two agree: tagging `v2.0.0` on a commit that still says `1.0.0`
+      # publishes `1.0.0`, or fails at the upload if that file is already on PyPI.
+      - name: Build the package
+        run: uv build --out-dir dist
+
+      - name: Publish to PyPI
+        run: uv publish --trusted-publishing always

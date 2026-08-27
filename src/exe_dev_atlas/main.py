@@ -1,0 +1,136 @@
+# The two things you do to the atlas: run it, and put it on a machine.
+#
+# Neither command decides anything. `serve` builds the app and runs it; `install` renders a
+# unit and converges it; everything either one needs to be told arrives as an argument.
+
+from __future__ import annotations
+
+import asyncio
+import getpass
+import logging
+import os
+import shutil
+from pathlib import Path
+from typing import Annotated
+from typing import Final
+
+import typer
+
+from exe_dev_atlas import app
+from exe_dev_atlas.install import SERVICE
+from exe_dev_atlas.install import Converged
+from exe_dev_atlas.install import NoInterpreter
+from exe_dev_atlas.install import can_run_the_atlas
+from exe_dev_atlas.install import config_home
+from exe_dev_atlas.install import converge
+from exe_dev_atlas.install import is_lingering
+from exe_dev_atlas.install import running_executable
+from exe_dev_atlas.install import systemctl_for
+from exe_dev_atlas.install import unit_path
+
+# What exe.dev's proxy points the bare `https://<vm>.exe.xyz/` hostname at, which is the
+# whole reason this program has a default port at all: served here, the box's front door is
+# an index of everything else worth opening rather than any one of those things.
+DEFAULT_PORT: Final = 8000
+
+Port = Annotated[
+    int,
+    typer.Option(
+        "--port",
+        "-p",
+        envvar="EXE_DEV_ATLAS_PORT",
+        help="the port to serve on, which exe.dev proxies to https://<vm>.exe.xyz:<port>/",
+    ),
+]
+
+exe_dev_atlas = typer.Typer(
+    help="Serve an index of this VM's ports, sessions, and workspaces, or install it on this machine.",
+    no_args_is_help=True,
+    add_completion=False,
+)
+
+
+@exe_dev_atlas.command()
+def serve(port: Port = DEFAULT_PORT) -> None:
+    """Run the atlas in the foreground, until a signal stops it."""
+    start_logging()
+    app.serve_until_stopped(port)
+
+
+@exe_dev_atlas.command()
+def install(port: Port = DEFAULT_PORT) -> None:
+    """
+    Converge this machine's user systemd unit and restart the atlas onto this interpreter.
+
+    The unit names the interpreter running this command, so what an install means is "the
+    running service is this installation of the package". Run it after upgrading the package:
+    an upgrade in place leaves the unit text identical, so only the restart puts the new code
+    in front of anything.
+
+    Safe to run as often as you like. A restarted scan re-derives the whole listing from the
+    kernel and holds nothing from the one it replaced.
+    """
+    if shutil.which("systemctl") is None:
+        typer.echo("no systemctl here, so there is no service to install", err=True)
+        raise typer.Exit(1)
+
+    try:
+        executable = running_executable()
+    except NoInterpreter as missing:
+        typer.echo(str(missing), err=True)
+        raise typer.Exit(1) from None
+
+    # Asked before anything is written, so a unit that could not start is never installed.
+    if not asyncio.run(can_run_the_atlas(executable)):
+        typer.echo(
+            f"{executable} cannot import exe_dev_atlas, so the service would fail at every start.\n"
+            f"Install the package and run `exe-dev-atlas install` from that installation.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    unit = unit_path(config_home(os.environ))
+    systemctl = systemctl_for(os.environ)
+
+    converged = asyncio.run(converge(executable, unit, port, systemctl))
+    _report(converged, executable, port)
+
+    if not asyncio.run(is_lingering(getpass.getuser())):
+        typer.echo(
+            f"\nnote: lingering is off for this user, so {SERVICE} starts at your first login\n"
+            f"rather than at boot. `loginctl enable-linger {getpass.getuser()}` fixes that.",
+            err=True,
+        )
+
+
+def start_logging() -> None:
+    """
+    Send the server's own account of itself to stderr, which is where the journal reads it.
+
+    The unit sets no `StandardError=`, so systemd's default puts stderr in the journal and
+    `journalctl --user -u exe-dev-atlas` is the whole log story. Nothing here carries a
+    timestamp, because the journal stamps every line it receives and running in the
+    foreground is the same output without one rather than a different format.
+    """
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+
+def _report(converged: Converged, executable: Path, port: int) -> None:
+    """
+    Say what changed about the unit, then say what is running either way.
+
+    "Already current" is the answer about the *file* on most runs, and on its own it reads as
+    "nothing happened", which is the misunderstanding the second line exists to prevent: the
+    restart is the point of running this after an upgrade, and the unit text cannot show a
+    change in the code it starts.
+    """
+    typer.echo(f"installed {converged.unit}" if converged.unit_changed else f"{converged.unit} is already current")
+    typer.echo(f"restarted {SERVICE}, serving on port {port} from {executable}")
+
+
+def main() -> None:
+    exe_dev_atlas()
+
+
+if __name__ == "__main__":
+    main()
