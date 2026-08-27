@@ -12,17 +12,34 @@ from exe_dev_atlas.page import STYLESHEET_URL
 from exe_dev_atlas.page import page_response
 from exe_dev_atlas.page import shell
 
+SCRIPT_SOURCE = (STATIC_ROOT / "atlas.js").read_text()
+
 # Every id the script looks up, read out of the script rather than listed again here. The
 # shell's whole job is to be the skeleton those writes land in, so one missing id is a page
 # that renders blank with no server-side error to notice, and a list maintained by hand does
 # not grow when somebody adds a lookup.
-SCRIPT_IDS = sorted(set(re.findall(r'getElementById\("([^"]+)"\)', (STATIC_ROOT / "atlas.js").read_text())))
+SCRIPT_IDS = sorted(
+    {
+        found
+        for match in re.finditer(
+            r"""getElementById\(["']([^"']+)["']\)|querySelector(?:All)?\(["']#([^"'\s]+)["']\)""",
+            SCRIPT_SOURCE,
+        )
+        for found in match.groups()
+        if found
+    }
+)
+
+# The ids the shell actually renders, read the same way.
+SHELL_IDS = sorted(set(re.findall(r'(?:^|\s)id="([^"]+)"', shell())))
 
 
 def test_the_script_looks_its_elements_up_the_way_this_file_reads_them() -> None:
-    # Without this, a script that stopped spelling its lookups that way would leave the
-    # parametrized test below with no cases at all, passing by finding nothing to check.
-    assert SCRIPT_IDS
+    # The other direction of the parametrized test below, and the reason a lookup spelled some
+    # way the pattern above cannot read is not a silent hole: such a lookup drops out of
+    # SCRIPT_IDS, the parametrized test stops asking about that id, and this one is left with a
+    # shell id nothing accounts for. An empty set of lookups fails here for the same reason.
+    assert SCRIPT_IDS == SHELL_IDS
 
 
 @pytest.mark.parametrize("element_id", SCRIPT_IDS)
@@ -47,6 +64,17 @@ def test_the_empty_state_names_the_range_the_proxy_actually_forwards() -> None:
     # Derived from ROUTED_PORTS rather than typed twice, so widening the range cannot leave
     # the page telling the reader something the scanner no longer does.
     assert f"({ROUTED_PORTS.start}-{ROUTED_PORTS.stop - 1})" in shell()
+
+
+def test_the_footer_names_the_digits_the_script_actually_binds() -> None:
+    # The script owns the range and the shell only names it, so the two are pinned here rather
+    # than derived: widening HOTKEYS without touching the footer would have the page tell the
+    # reader about fewer keys than it answers to.
+    hotkeys = re.search(r'HOTKEYS = "([^"]+)"', SCRIPT_SOURCE)
+    assert hotkeys
+    digits = hotkeys.group(1)
+
+    assert f"<kbd>{digits[0]}</kbd>\N{EN DASH}<kbd>{digits[-1]}</kbd>" in shell()
 
 
 def test_the_rows_and_the_empty_notice_start_hidden_or_empty() -> None:

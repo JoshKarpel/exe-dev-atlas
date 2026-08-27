@@ -21,11 +21,12 @@ function urlFor(port, path) {
 }
 
 // Offer a link to the keyboard and answer with the digit that now opens it, or
-// "" once the row of digits is used up. One step, because the digit *is* the
-// position: labelling separately is how the two drift apart.
+// "" once the row of digits is used up. The label is read out of HOTKEYS at the
+// position the link landed in, which is the same string and the same index the
+// keypress handler resolves, so a digit on the page cannot open another row.
 function offer(href) {
   openable.push(href);
-  return openable.length <= HOTKEYS.length ? openable.length : "";
+  return HOTKEYS[openable.length - 1] ?? "";
 }
 
 // This page is itself served on the port the bare hostname points at, so its own
