@@ -9,10 +9,22 @@ are live and what is on them. The atlas serves that list on the port the bare ho
 at, so `https://<vm>.exe.xyz/` becomes a launcher for everything else on the box, alongside
 the zellij sessions that have no port of their own.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
+  <img alt="One row per listening process, each carrying the port, the title the port served,
+  the working directory, the command line, and the uptime, under a VS Code link"
+  src="docs/screenshot-light.png">
+</picture>
+
+## Install
+
 ```console
 $ uv tool install exe-dev-atlas
 $ exe-dev-atlas install
 ```
+
+exeuntu, the default exe.dev image, ships with [uv](https://docs.astral.sh/uv/), so there is
+nothing to install before that first line.
 
 `install` writes a user systemd unit and starts it. `serve` runs the same server in the
 foreground. Both take `--port` (default 8000, also read from `EXE_DEV_ATLAS_PORT`).

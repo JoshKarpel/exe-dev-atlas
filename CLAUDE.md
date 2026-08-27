@@ -11,7 +11,15 @@ $ just test tests/test_scan.py::test_name   # extra args go straight to pytest
 $ just check            # pre-commit over all files, then mypy
 $ just serve --port 8123  # foreground, on a non-default port
 $ just logs             # journalctl --user -u exe-dev-atlas -f
+$ just screenshot       # regenerate the README's images from this machine
 ```
+
+The README's screenshots are generated, not hand-taken, so a change to `page.py`, `atlas.css`,
+or `atlas.js` that alters the layout means running `just screenshot` in the same change. It
+serves its own atlas, reads the owner address from reflection so the shot carries the owner
+view, and writes both colour schemes; `--public` withholds the session names and the VS Code
+link. Its playwright dependency is in a PEP 723 header rather than the dev group, because CI
+syncs that group and this is 140 MB of browser driver.
 
 `pytest` runs under `xdist` (`-n auto`), `pytest-randomly`, and a 10-second per-test
 timeout, all from `addopts`. A test that needs longer raises it with

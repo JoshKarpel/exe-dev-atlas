@@ -37,3 +37,7 @@ install *args:
 [doc('Follow the atlas log')]
 logs *args:
     journalctl --user -u exe-dev-atlas -f {{ args }}
+
+[doc("Capture the README's screenshots of this machine, in both colour schemes")]
+screenshot *args:
+    uv run --script scripts/screenshot.py {{ args }}

@@ -119,6 +119,13 @@ warn_no_return = true
 warn_unreachable = true
 warn_redundant_casts = true
 
+# `scripts/screenshot.py` carries its dependency in a PEP 723 header rather than in the dev
+# group, so playwright is not in the environment mypy runs against. Silencing the import alone
+# rather than excluding the file keeps the rest of the script checked.
+[[tool.mypy.overrides]]
+module = ["playwright.*"]
+ignore_missing_imports = true
+
 [tool.coverage.run]
 branch = true
 source = ["src"]
