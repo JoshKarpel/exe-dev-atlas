@@ -19,6 +19,16 @@
   which is already how a VM whose reflection lookup did not answer says there is no link to
   offer, so the header renders the same either way.
 
+- **More than one atlas on a machine.** `install --systemd-unit-suffix dev` converges
+  `exe-dev-atlas-dev` rather than `exe-dev-atlas`, so a checkout can be installed and
+  restarted at will beside the one serving the VM's front door. Every `systemctl` call names
+  the unit that was rendered, so an install reaches no other; the package name is always the
+  prefix, so `systemctl --user list-units 'exe-dev-atlas*'` lists them all; and a suffix that
+  a unit name could not carry is refused before anything is written, rather than interpolated
+  into a path under `~/.config/systemd/user`. Each install needs its own `--port`, since
+  nothing stops two units from being told to bind the same one. A unit's `Description` now
+  names the port it serves, so `systemctl --user list-units` tells two of them apart.
+
 ## 0.1.0
 
 ### Added

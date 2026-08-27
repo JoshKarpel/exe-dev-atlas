@@ -10,9 +10,15 @@ $ just test             # mypy, then pytest
 $ just test tests/test_scan.py::test_name   # extra args go straight to pytest
 $ just check            # pre-commit over all files, then mypy
 $ just serve --port 8123  # foreground, on a non-default port
-$ just logs             # journalctl --user -u exe-dev-atlas -f
+$ just install          # this checkout as exe-dev-atlas-dev on port 8001
+$ just logs             # journalctl --user -u exe-dev-atlas-dev -f
 $ just screenshot       # regenerate the README's images from this machine
 ```
+
+`just install` and `just logs` are about the *dev* unit, never the default one: this box also
+runs a published atlas on `exe-dev-atlas` and port 8000, converged daily by a timer the
+dotfiles own, and a checkout that installed over it would take the box's own front door down
+with every experiment. The suffix and the port are variables at the top of the `justfile`.
 
 The README's screenshots are generated, not hand-taken, so a change to `page.py`, `atlas.css`,
 or `atlas.js` that alters the layout means running `just screenshot` in the same change. It
@@ -169,6 +175,15 @@ never fetches or builds an environment. In `converge`, the `daemon-reload` is co
 the unit text changing but the `restart` is **unconditional**: an upgrade in place renders
 identical text, so the restart is the only thing that puts new code in front of anything.
 
+A `Unit` is everything that can differ between two atlases on one machine, and `converge`
+takes one rather than the settings loose, so adding an install-time setting is a field rather
+than another argument threaded through `main.install`. `unit.service` is what every
+`systemctl` call names, which is what keeps an install off every other unit on the box.
+`service_name` is the only thing that builds one, and it **parses** rather than accepts: the
+suffix is interpolated into a filename under `~/.config/systemd/user`, so `../ssh-agent` has
+to be refused before anything is written. The package name is always the prefix, so
+`systemctl --user list-units 'exe-dev-atlas*'` answers "what atlases are on this box".
+
 `WantedBy=default.target` starts the unit when the *user manager* starts, which without
 `loginctl enable-linger <user>` is at first login rather than at boot. `install` checks this
 and says so if it is off, because the failure is otherwise invisible: the unit is enabled, the
@@ -179,7 +194,7 @@ service manager.
 
 ### Functional core
 
-`group_listeners`, `build_row`, `Row.as_dict`, `is_owner`, `unit_text`, `is_zellij_web`,
+`group_listeners`, `build_row`, `Row.as_dict`, `is_owner`, `Unit.text`, `service_name`, `is_zellij_web`,
 `format_probe_title`, `probe_address`, `probe_url`, and `page.shell` are pure and tested
 directly. The I/O shell around them is thin: `processes.run` returns a `Ran` value (a timeout
 and a cancellation both kill the child; a timeout is an outcome rather than an exception, and

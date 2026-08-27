@@ -2,6 +2,13 @@
 
 set ignore-comments
 
+# This checkout installs beside the atlas that holds the default unit and the default port,
+# so working on it never takes down the one the box is actually fronted by. The service name
+# is derived rather than written out twice: it is what `install` renders from the suffix.
+DEV_SUFFIX := "dev"
+DEV_PORT := "8001"
+DEV_SERVICE := "exe-dev-atlas-" + DEV_SUFFIX
+
 [default]
 [doc('List available recipes')]
 list:
@@ -30,13 +37,13 @@ check:
 serve *args:
     uv run exe-dev-atlas serve {{ args }}
 
-[doc('Install the user systemd unit on this machine and restart the atlas onto this interpreter')]
+[doc('Install this checkout as the dev atlas, beside whatever holds the default unit')]
 install *args:
-    uv run exe-dev-atlas install {{ args }}
+    uv run exe-dev-atlas install --systemd-unit-suffix {{ DEV_SUFFIX }} --port {{ DEV_PORT }} {{ args }}
 
-[doc('Follow the atlas log')]
+[doc('Follow the dev atlas log')]
 logs *args:
-    journalctl --user -u exe-dev-atlas -f {{ args }}
+    journalctl --user -u {{ DEV_SERVICE }} -f {{ args }}
 
 [doc("Capture the README's screenshots of this machine, in both colour schemes")]
 screenshot *args:

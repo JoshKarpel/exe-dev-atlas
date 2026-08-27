@@ -160,6 +160,25 @@ chose the version; `install` only points systemd at it. To upgrade, upgrade the 
 run `install` again: an upgrade in place renders an identical unit, so the restart is what
 deploys the changes, and it happens whether the unit changed or not.
 
+### More than one atlas on a box
+
+`--systemd-unit-suffix` installs under a name of its own, so a second atlas sits beside the
+first instead of converging onto it:
+
+```console
+$ exe-dev-atlas install --systemd-unit-suffix dev --port 8001
+installed /home/you/.config/systemd/user/exe-dev-atlas-dev.service
+restarted exe-dev-atlas-dev, serving on port 8001 from /home/you/src/exe-dev-atlas/.venv/bin/python
+```
+
+Every install reaches exactly the unit it rendered, so the one above leaves `exe-dev-atlas`
+running whatever it was already running. Give each its own `--port`: nothing stops two units
+from being told to bind the same one, and the loser restarts every five seconds. The suffix
+may hold letters, digits, hyphens, and underscores.
+
+This is what a checkout wants, and what `just install` in this repository does: working on the
+atlas shouldn't take down the one serving the VM's front door.
+
 ## Development
 
 We use `mise` to manage tool installs and `just` to manage recipes.
