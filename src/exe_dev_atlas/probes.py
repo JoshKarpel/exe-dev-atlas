@@ -42,6 +42,17 @@ PROBE_MAX_BYTES: Final = 65_536
 TITLE_PATTERN: Final = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 
 
+# What identifies a probe result: a port *and* the process holding it. Both halves matter, and
+# CLAUDE.md says why: two processes can hold one port number between them, so a key of port
+# alone would describe one of them with the other's answer, and a restarted process would
+# inherit the result belonging to the one it replaced instead of being asked again.
+type ProbeKey = tuple[int, int | None]
+
+
+def probe_key(listener: Listener) -> ProbeKey:
+    return (listener.port, listener.pid)
+
+
 @dataclass(frozen=True, slots=True)
 class Probe:
     """What the port said when asked for a page."""
@@ -165,22 +176,22 @@ class Probes:
 
     def __init__(self, client: Client) -> None:
         self._client = client
-        self._results: dict[tuple[int, int | None], Probe] = {}
+        self._results: dict[ProbeKey, Probe] = {}
         # The probe running for each key, which is both the "already asked" ledger and the
         # strong reference that keeps it alive: asyncio holds only a weak one and will
         # otherwise collect a task mid-probe.
-        self._probing: dict[tuple[int, int | None], asyncio.Task[None]] = {}
+        self._probing: dict[ProbeKey, asyncio.Task[None]] = {}
 
     def get(self, listener: Listener) -> Probe | None:
-        return self._results.get((listener.port, listener.pid))
+        return self._results.get(probe_key(listener))
 
     def refresh(self, listeners: list[Listener]) -> None:
-        live = {(listener.port, listener.pid) for listener in listeners}
+        live = {probe_key(listener) for listener in listeners}
         for key in list(self._results):
             if key not in live:
                 del self._results[key]
         for listener in listeners:
-            key = (listener.port, listener.pid)
+            key = probe_key(listener)
             if not self._is_due(key):
                 continue
             task = asyncio.create_task(self._run(listener))
@@ -198,10 +209,10 @@ class Probes:
         """
         await cancel_futures(task for task in self._probing.values() if not task.done())
 
-    def _forget(self, key: tuple[int, int | None], _finished: asyncio.Task[None]) -> None:
+    def _forget(self, key: ProbeKey, _finished: asyncio.Task[None]) -> None:
         self._probing.pop(key, None)
 
-    def _is_due(self, key: tuple[int, int | None]) -> bool:
+    def _is_due(self, key: ProbeKey) -> bool:
         if key in self._probing:
             return False
         previous = self._results.get(key)
@@ -210,4 +221,4 @@ class Probes:
         return time.time() - previous.at >= PROBE_INTERVAL.total_seconds()
 
     async def _run(self, listener: Listener) -> None:
-        self._results[(listener.port, listener.pid)] = await probe_port(self._client, listener)
+        self._results[probe_key(listener)] = await probe_port(self._client, listener)

@@ -36,9 +36,11 @@ Wants=network-online.target
 
 [Service]
 Type=exec
-# A user unit inherits none of a login shell's PATH. This is the standard system set and
-# nothing more, because `ss` is the only thing looked up on it: the zellij binary a session
-# lookup runs is read from /proc/<pid>/exe, so it needs no PATH entry of its own.
+# A user unit inherits none of a login shell's PATH, so this is the standard system set and
+# nothing more. Nothing the service runs is currently looked up on it: sockets come from
+# psutil rather than a subprocess, and the zellij binary a session lookup runs is read from
+# /proc/<pid>/exe. It is here so that a child which does need one finds an ordinary PATH
+# rather than none at all.
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart={executable} -m exe_dev_atlas serve --port {port}
 Restart=always

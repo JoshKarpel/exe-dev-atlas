@@ -1,9 +1,9 @@
 # Running a program and getting back what it did, as one value.
 #
-# Every subprocess here is short, quiet, and expected to finish on its own: `ss` listing
-# sockets, `zellij` listing sessions, `systemctl` converging a unit. None of them streams, none
-# produces output worth bounding, and none needs a two-stage kill, so this is `communicate`
-# with a timeout around it rather than a process supervisor.
+# Every subprocess here is short, quiet, and expected to finish on its own: `zellij` listing
+# sessions, `systemctl` converging a unit, `loginctl` answering whether a user lingers. None of
+# them streams, none produces output worth bounding, and none needs a two-stage kill, so this is
+# `communicate` with a timeout around it rather than a process supervisor.
 
 from __future__ import annotations
 

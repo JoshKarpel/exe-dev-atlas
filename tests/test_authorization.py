@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import pytest
+from conftest import OWNER
 from conftest import as_caller
 from conftest import scope
 from without_asgi import HttpScope
 
 from exe_dev_atlas.app import CALLER_EMAIL_HEADER
 from exe_dev_atlas.app import is_owner
-
-OWNER = "owner@example.com"
 
 
 def test_the_owners_own_address_is_recognised() -> None:

@@ -8,6 +8,7 @@ from dataclasses import fields
 
 import psutil
 import pytest
+from conftest import ABSENT_PID
 from without_http import ConnectionPool
 
 from exe_dev_atlas.listeners import Listener
@@ -21,10 +22,6 @@ from exe_dev_atlas.scan import scan_once
 VM = Vm(name="parrot", emoji="🦜")
 VSCODE_URL = "vscode://vscode-remote/ssh-remote+parrot.exe.xyz/home/pilot?windowId=_blank"
 OWN_PORT = 8123
-
-# High enough that no process holds it, so nothing answers about it and the row carries the
-# blanks a listener whose process could not be read renders with.
-ABSENT_PID = 4_194_303
 
 FIRST_PUBLIC = '{"rows": [{"port": 4321}]}'
 FIRST_OWNER = '{"rows": [{"port": 4321, "sessions": ["work"]}]}'

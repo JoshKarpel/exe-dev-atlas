@@ -148,11 +148,11 @@ def build_router() -> Router[Atlas]:
             static_files(STATIC_PREFIX, assets),
             get("/events", http_scope())(events),
         ),
-        fallback=handle(http_scope(), fn=_not_found),
+        fallback=handle(fn=_not_found),
     )
 
 
-async def _not_found(_atlas: Atlas, _scope: HttpScope) -> Response:
+async def _not_found(_atlas: Atlas) -> Response:
     return NOT_FOUND
 
 

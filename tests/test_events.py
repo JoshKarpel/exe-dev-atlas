@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 
 import pytest
+from conftest import OWNER
 from conftest import as_caller
 from conftest import scope
 from without_asgi import HttpScope
@@ -15,8 +16,6 @@ from exe_dev_atlas.app import Atlas
 from exe_dev_atlas.app import events
 from exe_dev_atlas.page import page_response
 from exe_dev_atlas.scan import Broadcast
-
-OWNER = "owner@example.com"
 
 # Distinct on both halves, so a connection served the wrong one is visible rather than
 # merely differing in a field somebody forgot to assert on.

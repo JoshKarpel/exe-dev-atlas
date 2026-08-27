@@ -179,4 +179,12 @@ def _started_at(process: psutil.Process) -> int | None:
 
 
 def home_directory() -> str:
+    """
+    Where this user's home directory is, per the passwd database rather than `$HOME`.
+
+    Asked of the kernel because the answer names a directory on the machine an SSH session
+    will land in, and the environment this daemon happens to have been started with is not
+    evidence about that: a unit run with no `HOME`, or one an operator's shell exported
+    something else into, would otherwise put a directory nobody asked for in the VS Code link.
+    """
     return pwd.getpwuid(os.getuid()).pw_dir

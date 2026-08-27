@@ -9,6 +9,13 @@ from without_http import ConnectionPool
 
 from exe_dev_atlas.app import CALLER_EMAIL_HEADER
 
+# High enough that nothing holds it, so every read about it comes back empty and the row
+# carries the blanks a listener whose process could not be read renders with.
+ABSENT_PID = 4_194_303
+
+# The address the VM is owned by, wherever a test needs one to authorize against.
+OWNER = "owner@example.com"
+
 
 @pytest.fixture
 async def pool() -> AsyncIterator[ConnectionPool]:

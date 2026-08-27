@@ -5,19 +5,27 @@ import re
 import pytest
 from without_asgi import headers
 
+from exe_dev_atlas.app import STATIC_ROOT
 from exe_dev_atlas.listeners import ROUTED_PORTS
 from exe_dev_atlas.page import SCRIPT_URL
 from exe_dev_atlas.page import STYLESHEET_URL
 from exe_dev_atlas.page import page_response
 from exe_dev_atlas.page import shell
 
-# Every id the script looks up with getElementById. The shell's whole job is to be the
-# skeleton those writes land in, so one missing id is a page that renders blank with no
-# server-side error to notice.
-REQUIRED_IDS = ("ports", "empty", "state", "workspaces", "favicon", "host")
+# Every id the script looks up, read out of the script rather than listed again here. The
+# shell's whole job is to be the skeleton those writes land in, so one missing id is a page
+# that renders blank with no server-side error to notice, and a list maintained by hand does
+# not grow when somebody adds a lookup.
+SCRIPT_IDS = sorted(set(re.findall(r'getElementById\("([^"]+)"\)', (STATIC_ROOT / "atlas.js").read_text())))
 
 
-@pytest.mark.parametrize("element_id", REQUIRED_IDS)
+def test_the_script_looks_its_elements_up_the_way_this_file_reads_them() -> None:
+    # Without this, a script that stopped spelling its lookups that way would leave the
+    # parametrized test below with no cases at all, passing by finding nothing to check.
+    assert SCRIPT_IDS
+
+
+@pytest.mark.parametrize("element_id", SCRIPT_IDS)
 def test_the_shell_carries_every_id_the_script_writes_into(element_id: str) -> None:
     assert f'id="{element_id}"' in shell()
 

@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+from conftest import ABSENT_PID
 
 from exe_dev_atlas.listeners import NO_PROCESS
 from exe_dev_atlas.listeners import ROUTED_PORTS
@@ -19,9 +20,6 @@ from exe_dev_atlas.listeners import group_listeners
 from exe_dev_atlas.listeners import read_environ
 from exe_dev_atlas.listeners import read_listeners
 from exe_dev_atlas.listeners import read_process
-
-# High enough that nothing holds it, so every read about it comes back empty.
-ABSENT_PID = 4_194_303
 
 
 def bound(port: int, address: str = "127.0.0.1", pid: int | None = 4711) -> Binding:

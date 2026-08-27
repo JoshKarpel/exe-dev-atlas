@@ -45,18 +45,16 @@ class FakeSystemctl:
 
 class TestUnitText:
     def test_the_rendered_unit_names_the_interpreter_and_the_port(self) -> None:
+        # The module rather than a console script: `sys.executable` is always absolute and
+        # always holds the package, while a console-script shim can be relocated out from
+        # under the unit.
         text = unit_text(INTERPRETER, PORT)
 
         assert f"ExecStart={INTERPRETER} -m exe_dev_atlas serve --port {PORT}" in text
 
-    def test_the_unit_invokes_the_module_rather_than_a_console_script(self) -> None:
-        # `sys.executable` is always absolute and always holds the package; a console-script
-        # shim can be relocated out from under the unit.
-        assert "-m exe_dev_atlas" in unit_text(INTERPRETER, PORT)
-
-    def test_the_unit_carries_a_path_that_can_reach_ss(self) -> None:
-        # `ss` is the one thing looked up on PATH, and a user unit inherits none of a login
-        # shell's, so an absent or sbin-less PATH would leave every scan empty.
+    def test_the_unit_carries_the_standard_system_path(self) -> None:
+        # A user unit inherits none of a login shell's PATH, so a child that does look
+        # something up on it would otherwise find nothing at all.
         path_line = next(
             line for line in unit_text(INTERPRETER, PORT).splitlines() if line.startswith("Environment=PATH=")
         )
