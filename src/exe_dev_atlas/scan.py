@@ -12,18 +12,19 @@ import psutil
 from without_http import Client
 
 from exe_dev_atlas import zellij
+from exe_dev_atlas.identity import Identity
 from exe_dev_atlas.listeners import Listener
 from exe_dev_atlas.listeners import Process
-from exe_dev_atlas.listeners import read_process
 from exe_dev_atlas.probes import Probe
 from exe_dev_atlas.probes import Probes
-from exe_dev_atlas.reflection import Vm
 
 SCAN_INTERVAL: Final = timedelta(seconds=1)
 
-# Injected rather than imported, so a test drives a scan over a listing it wrote instead of
-# over whatever this machine happens to be running.
+# Injected rather than imported, so a test drives a scan over a machine it wrote: a listing of
+# its own, and processes behind it that no test could arrange for real. What a row says about
+# a zellij web server in particular is decided from these two answers alone.
 type ReadListeners = Callable[[], list[Listener]]
+type ReadProcess = Callable[[int | None], Process]
 
 logger = logging.getLogger(__name__)
 
@@ -98,28 +99,24 @@ class Broadcast:
     """
     The latest payload, and a way to wait for the next different one.
 
-    Two payloads rather than one, serialized here so the cost is per scan and not per
-    connection. They differ only in whether zellij session names are present, and which one
-    a connection receives is an authorization decision made in the handler that holds the
-    caller's headers.
+    Serialized here rather than in the handler, so the cost is one per scan however many
+    connections are held, and every connection is served the same string.
     """
 
     def __init__(self) -> None:
         self._condition = asyncio.Condition()
         self._version = 0
-        self._public = "{}"
-        self._owner = "{}"
+        self._payload = "{}"
 
-    async def publish(self, public: str, owner: str) -> None:
+    async def publish(self, payload: str) -> None:
         async with self._condition:
-            if (public, owner) == (self._public, self._owner):
+            if payload == self._payload:
                 return
-            self._public = public
-            self._owner = owner
+            self._payload = payload
             self._version += 1
             self._condition.notify_all()
 
-    async def wait(self, seen: int, *, is_owner: bool) -> tuple[int, str]:
+    async def wait(self, seen: int) -> tuple[int, str]:
         """
         Block until the payload differs from `seen`, then return it and its version.
 
@@ -128,24 +125,18 @@ class Broadcast:
         """
         async with self._condition:
             await self._condition.wait_for(lambda: self._version != seen)
-            return self._version, (self._owner if is_owner else self._public)
+            return self._version, self._payload
 
 
 async def scan_once(
     broadcast: Broadcast,
     probes: Probes,
     read_listeners: ReadListeners,
+    read_process: ReadProcess,
     own_port: int,
-    vm: Vm,
-    vscode_url: str,
+    identity: Identity,
 ) -> None:
-    """
-    Read the machine once and publish the pair of payloads, if they say anything new.
-
-    Both payloads are built every scan even when nobody is connected as an owner, because
-    `publish` diffs against the last pair to decide whether there is news, and a pair built
-    only sometimes would report a change every time the other half appeared.
-    """
+    """Read the machine once and publish the payload, if it says anything new."""
     listeners = read_listeners()
     probes.refresh(listeners)
 
@@ -168,28 +159,30 @@ async def scan_once(
     )
     sessions = dict(zip(servers, listed, strict=True))
 
-    # Flagged for everyone, unlike the session names: it withholds a link rather than
-    # disclosing anything, and the command line already says `zellij web` to anyone reading
-    # the row.
-    public = [
-        row.as_dict() | {"is_session_server": True} if index in sessions else row.as_dict()
+    # The session list is what marks a row as a session server, so a server serving nothing
+    # carries an empty one rather than being indistinguishable from any other port: the page
+    # decides on the field's presence, and that empty list is exactly the row the new-session
+    # link exists for.
+    listing = [
+        row.as_dict() | {"sessions": list(sessions[index])} if index in sessions else row.as_dict()
         for index, row in enumerate(rows)
     ]
-    owner = [
-        row_dict | {"sessions": list(sessions[index])} if index in sessions else row_dict
-        for index, row_dict in enumerate(public)
-    ]
 
-    # The VS Code link is owner-only: it only works for someone with SSH access anyway, and
-    # ideally this would follow the VM's sharing grants, but reflection does not publish
-    # them, so ownership is the only distinction available.
-    #
-    # Name and emoji are not owner-only: the name is already in the URL of whoever is
-    # reading, and together they title and badge the tab for everyone.
-    common: dict[str, object] = {"own_port": own_port, "vm_name": vm.name, "vm_emoji": vm.emoji}
+    # Read here rather than passed in, because the refresh loop can have replaced them since
+    # the last scan: a renamed VM reaches every open page on the next payload. Nothing awaits
+    # between these three, and nothing but `Identity.update` writes them, so they are always
+    # the same answer rather than two halves of consecutive ones.
     await broadcast.publish(
-        json.dumps(common | {"rows": public}, sort_keys=True),
-        json.dumps(common | {"rows": owner, "vscode_url": vscode_url}, sort_keys=True),
+        json.dumps(
+            {
+                "own_port": own_port,
+                "vm_name": identity.vm.name,
+                "vm_emoji": identity.vm.emoji,
+                "vscode_url": identity.vscode_url,
+                "rows": listing,
+            },
+            sort_keys=True,
+        )
     )
 
 
@@ -197,9 +190,9 @@ async def scan_forever(
     broadcast: Broadcast,
     client: Client,
     read_listeners: ReadListeners,
+    read_process: ReadProcess,
     own_port: int,
-    vm: Vm,
-    vscode_url: str,
+    identity: Identity,
 ) -> None:
     """
     Rescan on a fixed cadence, for as long as the server this is bound to runs.
@@ -215,7 +208,7 @@ async def scan_forever(
     try:
         while True:
             try:
-                await scan_once(broadcast, probes, read_listeners, own_port, vm, vscode_url)
+                await scan_once(broadcast, probes, read_listeners, read_process, own_port, identity)
             except psutil.Error as unreadable:
                 logger.warning(f"This scan read nothing and the last listing stands: {unreadable!r}")
             except Exception:

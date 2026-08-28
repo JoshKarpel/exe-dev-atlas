@@ -17,9 +17,16 @@ body {
 }
 main { max-width: 62rem; margin: 0 auto; }
 header { display: flex; align-items: baseline; gap: .75rem; margin-bottom: 1.25rem; }
-h1 { font-size: 1.15rem; margin: 0; font-weight: 600; letter-spacing: -.01em; }
-#host { color: var(--dim); font-family: var(--mono); font-size: .85rem; }
-#workspaces {
+/* The VM's name, which is the heading. */
+h1 { font-size: 1.2rem; margin: 0; font-weight: 600; letter-spacing: -.01em; }
+/* Larger than the name it sits beside: a glyph reads smaller than text at the same
+   size, and this is the page's only mark. */
+#emblem { font-size: 1.35rem; line-height: 1; }
+#host { color: var(--dim); font-family: var(--mono); font-size: .8rem; }
+/* Scoped to the nav actually being shown, because the UA's `[hidden] { display: none }`
+   loses to an id selector: `#workspaces { display: flex }` would lay the nav out with
+   the attribute set, which is every page served with the VS Code link turned off. */
+#workspaces:not([hidden]) {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem;
   margin-bottom: .9rem;
 }
@@ -79,6 +86,11 @@ li.inert .port { color: var(--dim); }
 }
 .session:hover { border-color: var(--accent); }
 .session .key { width: auto; }
+/* Every other chip goes to a session that is already running; this one starts
+   one. Outlined rather than filled, and carrying no hotkey digit, so it does not
+   read as another destination sitting in the same row. */
+.session.create { background: none; border-color: var(--line); border-style: dashed; color: var(--dim); }
+.session.create:hover { border-color: var(--accent); color: var(--accent); }
 #empty { color: var(--dim); padding: 2rem 0; text-align: center; }
 footer { margin-top: 1.5rem; font-size: .75rem; color: var(--dim); }
 kbd {

@@ -3,6 +3,8 @@ const empty = document.getElementById("empty");
 const state = document.getElementById("state");
 const workspaces = document.getElementById("workspaces");
 const favicon = document.getElementById("favicon");
+const emblem = document.getElementById("emblem");
+const vm = document.getElementById("vm");
 document.getElementById("host").textContent = location.hostname;
 
 // The digits that open a link, which bounds how many rows can carry one. The
@@ -35,9 +37,23 @@ function linkFor(row, ownPort) {
   if (row.is_http === false || row.port === ownPort) return null;
   // A zellij web server creates a brand new session for anyone arriving without
   // one named in the path, so linking its root would litter the box with an
-  // empty session per visit. The per-session links below are the way in.
-  if (row.is_session_server) return null;
+  // empty session per visit. The chips below are the way in: the existing
+  // sessions, and one link that asks for a new one on purpose.
+  if (row.sessions) return null;
   return urlFor(row.port, "");
+}
+
+// The one link on the page that acts on the box rather than pointing at
+// something already on it, since arriving at a zellij web server's root creates
+// a session. That is why it is drawn as an action rather than a destination and
+// is never handed to `offer`: a session collected by a stray digit or a misclick
+// on the row stays on the box until somebody clears it from a shell.
+function newSessionLink(port) {
+  const link = document.createElement("a");
+  link.className = "session create";
+  link.href = urlFor(port, "");
+  link.textContent = "+ new session";
+  return link;
 }
 
 // One port number can carry two rows: two processes bound to it on different
@@ -63,44 +79,56 @@ function describe(row) {
   return row.command_name || "no title";
 }
 
+function faviconFor(emoji) {
+  const glyph = emoji.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+  return (
+    "data:image/svg+xml," +
+    encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">' +
+        '<text x="50" y="50" font-size="88" text-anchor="middle" ' +
+        'dominant-baseline="central">' +
+        glyph +
+        "</text></svg>"
+    )
+  );
+}
+
 // What the last payload said about the VM itself, so an unchanged answer costs
-// nothing. All three of these come from reflection, read once at startup, so they
-// are fixed for the life of the connection: re-encoding the favicon SVG and
-// rebuilding the VS Code link once a second would be work for a value that
-// cannot have changed.
+// nothing, which is every answer but the first one and a rename. Re-encoding the
+// favicon SVG and rebuilding the VS Code link once a second would be work for
+// three values that almost never move.
 let identity = null;
 
 function applyIdentity(payload) {
+  // The empty payload a connection gets when it arrives before the first scan
+  // says nothing about the VM, and the shell was already rendered from the name
+  // reflection answered with at startup. Everything below would blank it out.
+  if (!payload.vm_name) return;
+
   const current = JSON.stringify([payload.vm_name, payload.vm_emoji, payload.vscode_url]);
   if (current === identity) return;
   identity = current;
 
-  // The VM's own name where reflection knew it, otherwise whatever hostname got
-  // us here, which through a tunnel is `localhost` but still tells the reader
-  // which tab is which.
-  document.title = "Atlas - " + (payload.vm_name || location.hostname);
+  // Both of these are in the shell already. They are written again here for the
+  // one case the shell cannot cover: a VM renamed while this page was open, which
+  // the refresh loop picks up and the next payload carries.
+  document.title = payload.vm_name;
+  vm.textContent = payload.vm_name;
+
+  // Decoration beside the name, so an absent emoji leaves no gap where a glyph
+  // would have been rather than an empty box.
+  emblem.textContent = payload.vm_emoji;
+  emblem.hidden = !payload.vm_emoji;
 
   // The VM's emoji as the tab icon, drawn as SVG text so there is no image to
   // fetch or generate. dominant-baseline rather than a dy nudge, since the glyph
   // comes from whichever font the reader's system picked and its metrics are not
-  // ours to predict.
-  if (payload.vm_emoji) {
-    const glyph = payload.vm_emoji.replace(/[&<>]/g, (c) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]
-    );
-    favicon.href =
-      "data:image/svg+xml," +
-      encodeURIComponent(
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">' +
-          '<text x="50" y="50" font-size="88" text-anchor="middle" ' +
-          'dominant-baseline="central">' +
-          glyph +
-          "</text></svg>"
-      );
-  }
+  // ours to predict. A VM with no emoji is written back to the empty data URI the
+  // shell renders, since a rename can take the emoji away and leaving the last
+  // one there would title this tab with another VM's glyph.
+  favicon.href = payload.vm_emoji ? faviconFor(payload.vm_emoji) : "data:,";
 
-  // Absent for anyone but the owner, and off exe.dev, where there is no
-  // <vm>.exe.xyz for Remote-SSH to reach.
+  // Absent where the link was turned off at install.
   workspaces.hidden = !payload.vscode_url;
   workspaces.innerHTML = "";
   if (payload.vscode_url) {
@@ -165,7 +193,7 @@ function render(payload) {
     const badges = [];
     if (row.port === payload.own_port) badges.push(["this page", "badge here"]);
     if (row.is_http === false) badges.push(["no http", "badge"]);
-    if (row.is_session_server) badges.push(["session server", "badge"]);
+    if (row.sessions) badges.push(["session server", "badge"]);
     badges.forEach(([text, className]) => {
       const span = document.createElement("span");
       span.className = className;
@@ -204,23 +232,28 @@ function render(payload) {
       meta.appendChild(span);
     });
 
-    // Sessions arrive only for the VM's owner, so this is absent rather than
-    // empty for everyone else and the row renders as any other port would.
+    // Absent on every row but a zellij web server's, where it can still be empty
+    // because the server is serving no sessions. That empty list is the case the
+    // new-session link exists for, so the presence of the field rather than its
+    // length is what decides whether these are drawn at all.
     const sessions = li.querySelector(".sessions");
     sessions.innerHTML = "";
-    (row.sessions || []).forEach((name) => {
-      const link = document.createElement("a");
-      link.className = "session";
-      link.href = urlFor(row.port, encodeURIComponent(name));
-      const key = document.createElement("span");
-      key.className = "key";
-      key.textContent = offer(link.href);
-      link.appendChild(key);
-      const label = document.createElement("span");
-      label.textContent = name;
-      link.appendChild(label);
-      sessions.appendChild(link);
-    });
+    if (row.sessions) {
+      row.sessions.forEach((name) => {
+        const link = document.createElement("a");
+        link.className = "session";
+        link.href = urlFor(row.port, encodeURIComponent(name));
+        const key = document.createElement("span");
+        key.className = "key";
+        key.textContent = offer(link.href);
+        link.appendChild(key);
+        const label = document.createElement("span");
+        label.textContent = name;
+        link.appendChild(label);
+        sessions.appendChild(link);
+      });
+      sessions.appendChild(newSessionLink(row.port));
+    }
 
     // Appending an attached node *moves* it, so doing this unconditionally would tear
     // down and rebuild the whole list once a second. The rows above are updated field by

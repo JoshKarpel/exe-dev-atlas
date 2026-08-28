@@ -1,4 +1,4 @@
-# Putting the atlas on a machine, which on a Linux box means one user systemd unit.
+# Putting the atlas on a machine, which on a Linux box means a user systemd unit.
 #
 # The unit names the interpreter that ran the install. That is the whole mechanism and
 # everything else follows from it: `exe-dev-atlas install` is invoked *by* the installed CLI,
@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from collections.abc import Awaitable
 from collections.abc import Callable
@@ -28,9 +29,15 @@ from exe_dev_atlas.processes import run
 
 SERVICE: Final = "exe-dev-atlas"
 
+# What may follow the package name in a unit's own name. systemd accepts more than this, and
+# the rest is not worth what it costs to read: a `.` renders as a second filename extension,
+# an `@` makes the thing a template instance, and a `/` names another unit entirely. A
+# suffix is a word that tells two installs apart.
+SUFFIX: Final = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]*")
+
 UNIT: Final = """\
 [Unit]
-Description=Index this VM's ports, sessions, and workspaces on the default hostname
+Description=Index this VM's ports, sessions, and workspaces, served on port {port}
 After=network-online.target
 Wants=network-online.target
 
@@ -42,7 +49,7 @@ Type=exec
 # and handed an environment of its own rather than this one. It is here as an ordinary
 # default for anything that does inherit the unit's environment.
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart={executable} -m exe_dev_atlas serve --port {port}
+ExecStart={executable} -m exe_dev_atlas serve --port {port} {vscode_flag}
 Restart=always
 RestartSec=5
 
@@ -57,23 +64,91 @@ type Systemctl = Callable[[tuple[str, ...]], Awaitable[Ran]]
 
 
 @dataclass(frozen=True, slots=True)
+class Unit:
+    """
+    One installed atlas: what its unit is called, where the file lives, and what it starts.
+
+    A machine can hold several. Everything that can differ between them is here, so an
+    install converges one of these and disturbs no other: the service name decides which
+    unit is written and restarted, and the rest is what that unit runs.
+    """
+
+    service: str
+    config_home: Path
+    executable: Path
+    port: int
+    vscode_link: bool
+
+    @property
+    def path(self) -> Path:
+        """
+        The file this unit is written to, derived rather than carried beside the name.
+
+        `converge` writes this path and restarts `service`, so the two being one fact is what
+        keeps an install from writing one file and restarting a different unit. Held as a
+        field, that agreement would rest on every construction site remembering to pair them,
+        which is the failure `service_name`'s parsing already refuses one layer down.
+        """
+        return unit_path(self.config_home, self.service)
+
+    @property
+    def text(self) -> str:
+        """
+        The unit file this install would have, with every setting named either way.
+
+        The VS Code flag is rendered in both directions rather than appended only when the
+        link is off, so the installed unit is a record of what was asked for rather than a
+        record of one half of it: `--vs-code-link` says the link is on now and keeps saying
+        it if the command's default ever moves, where an absent flag would quietly start
+        meaning the opposite.
+        """
+        return UNIT.format(
+            executable=self.executable,
+            port=self.port,
+            vscode_flag="--vs-code-link" if self.vscode_link else "--no-vs-code-link",
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class Converged:
     """What an install actually changed, which on most runs is nothing."""
 
-    unit: Path
-    unit_changed: bool
+    unit: Unit
+    text_changed: bool
+
+
+class BadSuffix(ValueError):
+    """The suffix offered is not one a unit name can carry."""
+
+
+def service_name(suffix: str) -> str:
+    """
+    What this install's unit is called: the package name, and a suffix if one was asked for.
+
+    An install with no suffix is *the* atlas on this machine, which is what a machine wanting
+    only one gets without asking for anything. A suffixed one sits beside it under a name of
+    its own, so two installs never converge onto one unit and fight over a port.
+
+    The package name is always the prefix rather than the whole name being the caller's to
+    choose, which is what keeps `systemctl --user list-units 'exe-dev-atlas*'` an answer to
+    "what atlases are on this box" and keeps a typo from writing over an unrelated unit.
+    """
+    if not suffix:
+        return SERVICE
+    if not SUFFIX.fullmatch(suffix):
+        raise BadSuffix(
+            f"{suffix!r} cannot go in a unit name: use letters, digits, hyphens, and "
+            f"underscores, starting with a letter or a digit"
+        )
+    return f"{SERVICE}-{suffix}"
 
 
 def config_home(environ: Mapping[str, str]) -> Path:
     return Path(environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
 
 
-def unit_path(config_home: Path) -> Path:
-    return config_home / "systemd" / "user" / f"{SERVICE}.service"
-
-
-def unit_text(executable: Path, port: int) -> str:
-    return UNIT.format(executable=executable, port=port)
+def unit_path(config_home: Path, service: str) -> Path:
+    return config_home / "systemd" / "user" / f"{service}.service"
 
 
 class NoInterpreter(RuntimeError):
@@ -148,16 +223,16 @@ async def is_lingering(user: str) -> bool:
     return shown.ok and shown.stdout.strip().endswith("=yes")
 
 
-async def converge(executable: Path, unit: Path, port: int, systemctl: Systemctl) -> Converged:
+async def converge(unit: Unit, systemctl: Systemctl) -> Converged:
     """
-    Make this machine's service match this interpreter: the unit file, and the code it runs.
+    Make this unit match this interpreter: the file it is written from, and the code it runs.
 
     Comparing the unit text is not enough, and the reading that stops there is wrong in the
-    worst way available. The text is a function of an interpreter path and a port, so an
-    upgrade in place (which is what `uv tool upgrade` does) renders identically, and an
-    install that reloaded and restarted only on a difference would report success while
-    leaving the old code serving: it says the unit is already current, which is true, and a
-    reader takes it for a statement about the process.
+    worst way available. The text is a function of an interpreter path and the settings
+    `serve` was asked for, so an upgrade in place (which is what `uv tool upgrade` does)
+    renders identically, and an install that reloaded and restarted only on a difference
+    would report success while leaving the old code serving: it says the unit is already
+    current, which is true, and a reader takes it for a statement about the process.
 
     So the restart is unconditional and the reload is not: the manager needs re-reading only
     when the file it read has changed.
@@ -169,27 +244,36 @@ async def converge(executable: Path, unit: Path, port: int, systemctl: Systemctl
     unit that is installed but not enabled is the failure this exists to prevent. It needs no
     `--now`: `restart` starts a loaded unit that is not running, so a second way of starting
     it would be redundant.
+
+    What this does not say is whether the service is *running*: the unit is `Type=exec`, so
+    the start job completes at `execve` and a `restart` succeeds against a process that exits
+    a moment later because something else already holds the port. Watching for that is a
+    window to wait out and a state to interpret, and it is the journal's answer either way, so
+    `main` names the journal rather than making a claim it cannot support.
+
+    Every call names `unit.service`, so an install reaches exactly the one unit it rendered
+    and any other atlas on the machine goes on running untouched.
     """
-    changed = write_unit(unit, unit_text(executable, port))
+    changed = write_unit(unit.path, unit.text)
     if changed:
         (await systemctl(("daemon-reload",))).checked()
 
-    (await systemctl(("enable", SERVICE))).checked()
-    (await systemctl(("restart", SERVICE))).checked()
-    return Converged(unit=unit, unit_changed=changed)
+    (await systemctl(("enable", unit.service))).checked()
+    (await systemctl(("restart", unit.service))).checked()
+    return Converged(unit=unit, text_changed=changed)
 
 
-def write_unit(unit: Path, wanted: str) -> bool:
+def write_unit(path: Path, wanted: str) -> bool:
     """
-    Put `wanted` at `unit` if it is not already there, and say whether anything changed.
+    Put `wanted` at `path` if it is not already there, and say whether anything changed.
 
     The returned bool is what `converge` gates `daemon-reload` on, which is the only reason
     the comparison happens at all: the manager needs re-reading exactly when the file it read
     has changed, and never otherwise.
     """
-    unit.parent.mkdir(parents=True, exist_ok=True)
-    if unit.exists() and unit.read_text() == wanted:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and path.read_text() == wanted:
         return False
-    unit.write_text(wanted)
-    unit.chmod(0o644)
+    path.write_text(wanted)
+    path.chmod(0o644)
     return True

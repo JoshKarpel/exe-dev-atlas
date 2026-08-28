@@ -7,50 +7,41 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Final
 
 from without_asgi import NOT_FOUND
 from without_asgi import ASGIApp
 from without_asgi import Event
-from without_asgi import HttpScope
 from without_asgi import Response
 from without_asgi import ServerSentEvent
 from without_asgi import event_stream
-from without_asgi import headers
 from without_asgi import inventory
 from without_asgi import make_asgi_app
 from without_asgi import with_heartbeat
 from without_async import background_task
 from without_async import sleep_forever
 from without_http import ConnectionPool
+from without_http import LifespanError
 from without_http import serving
 from without_web import Reply
 from without_web import Router
 from without_web import get
 from without_web import handle
-from without_web import http_scope
 from without_web import static_files
 
-from exe_dev_atlas import page
 from exe_dev_atlas import reflection
+from exe_dev_atlas.identity import Identity
+from exe_dev_atlas.identity import refresh_forever
 from exe_dev_atlas.listeners import home_directory
 from exe_dev_atlas.listeners import read_listeners
+from exe_dev_atlas.listeners import read_process
 from exe_dev_atlas.scan import Broadcast
 from exe_dev_atlas.scan import scan_forever
 
 STATIC_ROOT: Final = Path(__file__).parent / "static"
 STATIC_PREFIX: Final = "/static"
-
-# exe.dev's proxy adds this from the authenticated session, and omits it entirely when the
-# caller is unauthenticated, which is why the comparison below fails closed.
-#
-# The proxy is the only thing authenticating anyone here, so this is a claim about the hop and
-# not about the request. Anything that reaches this port without making that hop, another user
-# on the box, an SSH tunnel, sends whatever address it likes and is believed. That is the
-# boundary the owner-only half rests on, and the README says so where somebody deciding how to
-# share a VM will read it.
-CALLER_EMAIL_HEADER: Final = b"x-exedev-email"
 
 # exe.dev fronts the VM with a proxy, and this is how the nginx family is told not to hold a
 # response: without it the proxy buffers events until the response ends, which for a stream
@@ -59,45 +50,25 @@ CALLER_EMAIL_HEADER: Final = b"x-exedev-email"
 UNBUFFERED: Final = ((b"x-accel-buffering", b"no"),)
 
 
+class DidNotStart(RuntimeError):
+    """
+    The server never took traffic, carrying whatever the lifespan said about why.
+
+    A startup failure reaches an ASGI server as a message rather than as the exception that
+    caused it, so this exists to hand the CLI that message under a name of this program's own
+    instead of the web library's.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class Atlas:
-    """
-    Everything a request handler is allowed to see, assembled once before the first one.
-
-    The owner's address is resolved at startup rather than per request: it is a remote call,
-    it decides an authorization question, and the answer changes about never. A box whose
-    reflection lookup failed serves the public view to everyone until it is restarted, which
-    is the safe direction to fail.
-    """
+    """Everything a request handler is allowed to see, assembled once before the first one."""
 
     broadcast: Broadcast
-    owner_email: str
-    page: Response
+    identity: Identity
 
 
-def is_owner(scope: HttpScope, owner_email: str) -> bool:
-    """
-    Whether the caller is the VM's owner, per exe.dev's own authentication.
-
-    The *last* value wins where the header arrives more than once. A proxy that appends
-    rather than replaces leaves whatever the client sent first in the list, so reading the
-    first one would let a caller name themselves by sending the header twice.
-
-    Decoded as UTF-8, which is what the address was encoded as on the way in. Reading it as
-    latin-1 mangles every non-ASCII address into one that matches nobody, which fails in the
-    safe direction and locks the owner out of their own box for good.
-
-    Both sides must be non-empty. Reflection failing at startup and an unauthenticated
-    caller both produce "", and `"" == ""` would otherwise disclose session names to
-    everyone at exactly the moment this process knows least.
-    """
-    sent = headers.get_all(scope.headers, CALLER_EMAIL_HEADER)
-    caller = sent[-1].decode("utf-8", "replace") if sent else ""
-    owner = owner_email.strip().casefold()
-    return bool(owner) and caller.strip().casefold() == owner
-
-
-async def payloads(broadcast: Broadcast, *, owner: bool) -> AsyncIterator[ServerSentEvent]:
+async def payloads(broadcast: Broadcast) -> AsyncIterator[ServerSentEvent]:
     """
     Each payload the scan publishes, from whatever it holds now, as the frame that carries it.
 
@@ -106,30 +77,28 @@ async def payloads(broadcast: Broadcast, *, owner: bool) -> AsyncIterator[Server
     """
     seen = -1
     while True:
-        seen, payload = await broadcast.wait(seen, is_owner=owner)
+        seen, payload = await broadcast.wait(seen)
         yield Event(data=payload)
 
 
-async def events(atlas: Atlas, scope: HttpScope) -> Reply:
+async def events(atlas: Atlas) -> Reply:
     """
     One SSE connection, held open until the client goes away.
 
-    Which of the two payloads this connection receives is decided once, here, because this
-    is the only place that holds the caller's headers; the scan loop serializes both and
-    knows about neither.
+    Every connection is served the same payload, whoever is asking: the page is exactly as
+    private as the VM it runs on, and the README says so where somebody deciding how to share
+    a VM will read it.
 
     A quiet machine publishes nothing for as long as it stays quiet, so the stream is
     heartbeated: a comment every so often keeps an intermediary from reaping a connection
     the page is still holding.
     """
-    return event_stream(
-        with_heartbeat(payloads(atlas.broadcast, owner=is_owner(scope, atlas.owner_email))),
-        headers=UNBUFFERED,
-    )
+    return event_stream(with_heartbeat(payloads(atlas.broadcast)), headers=UNBUFFERED)
 
 
 async def index(atlas: Atlas) -> Response:
-    return atlas.page
+    """The shell rendered from the VM's current name, which a rename replaces rather than edits."""
+    return atlas.identity.page
 
 
 def build_router() -> Router[Atlas]:
@@ -146,7 +115,7 @@ def build_router() -> Router[Atlas]:
         routes=(
             get("/")(index),
             static_files(STATIC_PREFIX, assets),
-            get("/events", http_scope())(events),
+            get("/events")(events),
         ),
         fallback=handle(fn=_not_found),
     )
@@ -156,53 +125,57 @@ async def _not_found(_atlas: Atlas) -> Response:
     return NOT_FOUND
 
 
-def build_app(port: int) -> ASGIApp:
+def build_app(port: int, *, vscode_link: bool) -> ASGIApp:
     """
-    The ASGI app, with the scan loop bound to its lifespan.
+    The ASGI app, with the two loops that outlive a request bound to its lifespan.
 
-    The scan runs for exactly as long as the server does: `background_task` starts it on
-    entry and cancels it on exit, so there is no thread to outlive a shutdown and no
-    lifetime to manage by hand.
+    Each runs for exactly as long as the server does: `background_task` starts it on entry and
+    cancels it on exit, so there is no thread to outlive a shutdown and no lifetime to manage
+    by hand. The scan reads the machine once a second; the refresh asks reflection whether
+    this VM is still called what it was called.
+
+    Reflection is read here, before anything binds, and a failure takes the startup with it.
+    That is deliberate: this page is an index *of a named VM*, and a process that cannot say
+    which box it is on has nothing honest to serve. Under the unit it restarts every five
+    seconds until the lookup answers, which is the loud version of the same fact.
+
+    Whether to offer the VS Code link is settled here rather than carried any further in: an
+    empty URL is already how the page is told there is no link to offer.
     """
     router = build_router()
 
     @asynccontextmanager
     async def lifespan() -> AsyncIterator[Atlas]:
         async with ConnectionPool() as pool:
-            # Gathered rather than awaited in turn: neither answer depends on the other, and
-            # the server accepts no connections until both land, so a reflection endpoint
-            # that is black-holed costs one timeout at startup rather than two.
-            vm, owner_email = await asyncio.gather(
-                reflection.read_vm(pool),
-                reflection.read_owner_email(pool),
-            )
-            atlas = Atlas(
-                broadcast=Broadcast(),
-                owner_email=owner_email,
-                page=page.page_response(),
-            )
-            scan = scan_forever(
-                atlas.broadcast,
-                pool,
-                read_listeners,
-                port,
-                vm,
-                reflection.vscode_url(vm.name, home_directory()),
-            )
-            async with background_task(scan):
+            # Bound once, so the read that decides whether this process starts at all and the
+            # reads that keep it current afterwards are the same call over the same pool.
+            read_reflection = partial(reflection.read_reflection, pool)
+            identity = Identity(await read_reflection(), home_directory() if vscode_link else None)
+            atlas = Atlas(broadcast=Broadcast(), identity=identity)
+            scan = scan_forever(atlas.broadcast, pool, read_listeners, read_process, port, identity)
+            async with background_task(scan), background_task(refresh_forever(read_reflection, identity)):
                 yield atlas
 
     return make_asgi_app(lifespan, http=router.dispatch)
 
 
-async def serve(port: int, host: str = "127.0.0.1") -> None:
-    """Run until cancelled, which for the CLI means until a signal stops the process."""
-    async with serving(build_app(port), host=host, port=port):
-        await sleep_forever()
+async def serve(port: int, host: str = "127.0.0.1", *, vscode_link: bool) -> None:
+    """
+    Run until cancelled, which for the CLI means until a signal stops the process.
 
-
-def serve_until_stopped(port: int, host: str = "127.0.0.1") -> None:
+    A lifespan that raised is reported by the ASGI plumbing as a `LifespanError` carrying the
+    message and nothing else, so it is renamed here for a caller that has no business knowing
+    which web library is under this.
+    """
     try:
-        asyncio.run(serve(port, host))
+        async with serving(build_app(port, vscode_link=vscode_link), host=host, port=port):
+            await sleep_forever()
+    except LifespanError as unstarted:
+        raise DidNotStart(str(unstarted)) from unstarted
+
+
+def serve_until_stopped(port: int, host: str = "127.0.0.1", *, vscode_link: bool) -> None:
+    try:
+        asyncio.run(serve(port, host, vscode_link=vscode_link))
     except KeyboardInterrupt:
         return

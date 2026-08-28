@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.2.0
+
+### Changed
+
+- **The page names the VM rather than the program.** The heading is the VM's own name, with
+  its emoji beside it, and the tab is titled with that name alone, so a window full of these
+  says which box each one is instead of repeating a product name the reader already knows.
+  Both are rendered into the shell rather than written by the first event, so a tab whose
+  stream never connects still says where it is. The emoji is marked as decoration rather than
+  read out as the page's heading, and a VM that has none renders none instead of a gap. The
+  hostname the browser actually reached is still in the header, quieter, because through a
+  tunnel that is `localhost` and names no VM at all.
+
+- **`install` says where to look for what came of the restart.** `systemctl restart` returns
+  once the process has been launched rather than once it has bound anything, so an install
+  reports the restart it performed and names `journalctl --user -u <unit> -e` for whether the
+  service stayed up, rather than announcing a port as served on the strength of a start job.
+
+- **The VM's name is a requirement, not a decoration.** exe.dev's reflection integration is
+  read before the server binds anything, and `exe-dev-atlas` now refuses to start if it does
+  not answer: everything the page says about which box you are looking at is that one lookup,
+  and a heading that has given up on naming the box is worse than a unit that says it could
+  not start. Under `systemd` that is `Restart=always` trying again every five seconds, with
+  the reason in the journal, rather than a silently unnamed page. It is read again every few
+  minutes, so a VM renamed under a running server re-titles its own page and re-points its
+  Remote-SSH link without a restart, and only an answer ever replaces the name: a lookup that
+  fails leaves the last good one standing.
+
+### Removed
+
+- **The owner-only view.** Every caller is served the same page: zellij session names, the
+  new-session link, and the VS Code Remote-SSH link now reach anyone who can reach the atlas.
+  Withholding them protected nothing that was not already reachable: the zellij web server
+  they name is on the same proxied hostname under the same sharing grant, so a reader who
+  could see the row could already open the server and take a session, and the VS Code link
+  only works for someone who has SSH access anyway. What is gone with it is the
+  `x-exedev-email` check, the reflection lookup for the VM's owner, and the second payload
+  per scan. The README says plainly what is true instead: all the atlas provides is
+  discoverability, and the VM's sharing settings are the whole boundary.
+
+### Added
+
+- **A way to start a zellij session from the page.** A `+ new session` link sits beside the
+  session list on a zellij web server's row, and appears even where the server is serving no
+  sessions at all, which is the case that previously dead-ended. It is the one link on the
+  page that acts on the box rather than pointing at something already running on it, so it is
+  drawn as an action rather than a destination and takes none of the `1`-`9` digits: a
+  session is created by a click that meant it, never by a stray keypress on the row.
+
+- **A way to turn the VS Code link off.** `serve` and `install` both take
+  `--vs-code-link/--no-vs-code-link`, default on, and an install renders whichever was asked
+  for into the unit's `ExecStart`, so the unit states the choice rather than inheriting the
+  command's default. With the link off the payload carries an empty `vscode_url`, and the nav
+  that would have held the link is left out of the layout rather than laid out empty.
+
+- **More than one atlas on a machine.** `install --systemd-unit-suffix dev` converges
+  `exe-dev-atlas-dev` rather than `exe-dev-atlas`, so a checkout can be installed and
+  restarted at will beside the one serving the VM's front door. Every `systemctl` call names
+  the unit that was rendered, so an install reaches no other; the package name is always the
+  prefix, so `systemctl --user list-units 'exe-dev-atlas*'` lists them all; and a suffix that
+  a unit name could not carry is refused before anything is written, rather than interpolated
+  into a path under `~/.config/systemd/user`. Each install needs its own `--port`, since
+  nothing stops two units from being told to bind the same one. A unit's `Description` now
+  names the port it serves, so `systemctl --user list-units` tells two of them apart.
+
 ## 0.1.0
 
 ### Added

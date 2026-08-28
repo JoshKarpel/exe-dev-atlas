@@ -63,9 +63,11 @@ async def read_sessions(pid: int | None, executable: str) -> tuple[str, ...]:
         limit=SESSION_LIST_TIMEOUT,
     )
 
-    # A server with no sessions exits non-zero, which is not an error worth distinguishing
-    # from one whose sessions we could not read: both render the port as an ordinary row with
-    # nothing broken out.
+    # A server with no sessions exits non-zero, and so does a lookup that genuinely failed:
+    # the two are told apart only by a message on stderr, and both leave us with no session
+    # names to show. What the row then says is "a session server serving nothing", which is
+    # true of the first and a lie about the second, and is why the empty answer is the one
+    # the `+ new session` link is drawn for rather than a dead end.
     if not ran.ok:
         return ()
 
