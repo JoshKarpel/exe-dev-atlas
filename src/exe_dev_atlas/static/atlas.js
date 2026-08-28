@@ -79,6 +79,20 @@ function describe(row) {
   return row.command_name || "no title";
 }
 
+function faviconFor(emoji) {
+  const glyph = emoji.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+  return (
+    "data:image/svg+xml," +
+    encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">' +
+        '<text x="50" y="50" font-size="88" text-anchor="middle" ' +
+        'dominant-baseline="central">' +
+        glyph +
+        "</text></svg>"
+    )
+  );
+}
+
 // What the last payload said about the VM itself, so an unchanged answer costs
 // nothing, which is every answer but the first one and a rename. Re-encoding the
 // favicon SVG and rebuilding the VS Code link once a second would be work for
@@ -109,21 +123,10 @@ function applyIdentity(payload) {
   // The VM's emoji as the tab icon, drawn as SVG text so there is no image to
   // fetch or generate. dominant-baseline rather than a dy nudge, since the glyph
   // comes from whichever font the reader's system picked and its metrics are not
-  // ours to predict.
-  if (payload.vm_emoji) {
-    const glyph = payload.vm_emoji.replace(/[&<>]/g, (c) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]
-    );
-    favicon.href =
-      "data:image/svg+xml," +
-      encodeURIComponent(
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">' +
-          '<text x="50" y="50" font-size="88" text-anchor="middle" ' +
-          'dominant-baseline="central">' +
-          glyph +
-          "</text></svg>"
-      );
-  }
+  // ours to predict. A VM with no emoji is written back to the empty data URI the
+  // shell renders, since a rename can take the emoji away and leaving the last
+  // one there would title this tab with another VM's glyph.
+  favicon.href = payload.vm_emoji ? faviconFor(payload.vm_emoji) : "data:,";
 
   // Absent where the link was turned off at install.
   workspaces.hidden = !payload.vscode_url;

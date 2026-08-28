@@ -294,6 +294,13 @@ and returns early on a payload with no `vm_name`: the empty `{}` a connection ge
 first scan says nothing about the VM, and writing it would blank a header the shell rendered
 correctly.
 
+Every write there names both outcomes rather than only the one with something to say, because
+what it is writing over is the *previous VM's* answer rather than an empty page: a rename that
+drops the emoji has to hide `#emblem` and put the favicon back to the `data:,` the shell
+renders, or the tab keeps a glyph belonging to a name nothing on the page still shows. Adding
+anything derived from the identity means deciding what it says when reflection answers without
+that field.
+
 The payload is JSON rendered by hand rather than HTML fragments swapped by htmx, which is the
 obvious thing to reach for over a stream like this one. htmx is a client for SSE, not an
 alternative to it (`htmx-ext-sse` gives `sse-connect` and `sse-swap`), so the trade is where
