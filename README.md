@@ -123,8 +123,8 @@ and assumes the shape of their [`exeuntu` image](https://github.com/boldsoftware
 ### The `systemd` unit
 
 `exe-dev-atlas install` writes a user `systemd` unit and starts it, so the atlas comes back
-after a crash and after a reboot. It says what it did and what the service is doing, and exits
-non-zero if the service did not stay up.
+after a crash and after a reboot. It says what it did and points at the journal for what came
+of it.
 
 It does not fetch, build, or manage a Python environment: whoever installed the package chose
 the version, and `install` only points systemd at it. To upgrade, upgrade the package and run
@@ -142,9 +142,9 @@ sits beside the first instead of overwriting it:
 
 ```console
 $ exe-dev-atlas install --systemd-unit-suffix dev --port 8001
-converging exe-dev-atlas-dev, and watching it for 7s afterwards
 installed /home/you/.config/systemd/user/exe-dev-atlas-dev.service
-restarted exe-dev-atlas-dev, serving on port 8001 from /home/you/src/exe-dev-atlas/.venv/bin/python
+restarted exe-dev-atlas-dev to serve port 8001 from /home/you/src/exe-dev-atlas/.venv/bin/python
+`journalctl --user -u exe-dev-atlas-dev -e` says whether it stayed up. A port another program already holds and an unanswered reflection lookup are the two usual reasons it would not.
 ```
 
 Give each its own `--port`: nothing stops two units from being told to bind the same one, and

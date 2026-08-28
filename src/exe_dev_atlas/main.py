@@ -17,7 +17,6 @@ import typer
 
 from exe_dev_atlas import app
 from exe_dev_atlas.app import DidNotStart
-from exe_dev_atlas.install import SETTLE
 from exe_dev_atlas.install import BadSuffix
 from exe_dev_atlas.install import Converged
 from exe_dev_atlas.install import NoInterpreter
@@ -146,13 +145,7 @@ def install(
         vscode_link=vscode_link,
     )
 
-    # Said before the work rather than after it, because the watch below is most of the time
-    # this command takes and a silent pause reads as a hang.
-    typer.echo(f"converging {service}, and watching it for {SETTLE.total_seconds():.0f}s afterwards")
-    converged = asyncio.run(converge(unit, systemctl_for(os.environ)))
-    _report(converged)
-    if not converged.is_running:
-        raise typer.Exit(1)
+    _report(asyncio.run(converge(unit, systemctl_for(os.environ))))
 
     if not asyncio.run(is_lingering(getpass.getuser())):
         typer.echo(
@@ -176,32 +169,27 @@ def start_logging() -> None:
 
 def _report(converged: Converged) -> None:
     """
-    Say what changed about the unit, then say what the service did about it.
+    Say what changed about the unit, then say what was done about it.
 
     "Already current" is the answer about the *file* on most runs, and on its own it reads as
     "nothing happened", which is the misunderstanding the second line exists to prevent: the
     restart is the point of running this after an upgrade, and the unit text cannot show a
     change in the code it starts.
 
-    The second line is what systemd was asked rather than what it was told, so a service that
-    started and then gave up says so here instead of being reported as serving a port nothing
-    is bound to. It names what to read next, since the reason is in the journal and nowhere
-    this command can reach.
+    The second line reports the restart, which is what this command did, and points at the
+    journal for what came of it. A `Type=exec` start job completes at `execve`, so a restart
+    that returned says nothing about whether the process is still up a moment later, and this
+    command has no answer to that question worth printing as if it did.
 
     Both lines name the service, because on a machine holding more than one atlas the only
     thing distinguishing this report from the other install's is which unit it is about.
     """
     unit = converged.unit
     typer.echo(f"installed {unit.path}" if converged.text_changed else f"{unit.path} is already current")
-    if converged.is_running:
-        typer.echo(f"restarted {unit.service}, serving on port {unit.port} from {unit.executable}")
-        return
     typer.echo(
-        f"{unit.service} is {converged.state or 'unknown'} rather than running, so nothing is serving "
-        f"port {unit.port}.\n"
-        f"`journalctl --user -u {unit.service} -e` says why. A port another program already holds "
-        f"and an unanswered reflection lookup are the two usual reasons.",
-        err=True,
+        f"restarted {unit.service} to serve port {unit.port} from {unit.executable}\n"
+        f"`journalctl --user -u {unit.service} -e` says whether it stayed up. A port another program "
+        f"already holds and an unanswered reflection lookup are the two usual reasons it would not."
     )
 
 

@@ -211,14 +211,14 @@ never fetches or builds an environment. In `converge`, the `daemon-reload` is co
 the unit text changing but the `restart` is **unconditional**: an upgrade in place renders
 identical text, so the restart is the only thing that puts new code in front of anything.
 
-A returned `restart` is not a running service, and reporting from it alone is the same class
-of lie as the difference-gated restart above. The unit is `Type=exec`, so its start job
-completes at `execve`, before the process has bound anything: an atlas told to bind a port
-another one already holds exits a moment later and `restart` still succeeds. So `converge`
-waits `SETTLE`, reads `ActiveState` back, and carries it in `Converged`; `main` names the port
-or names the state and exits non-zero. `SETTLE` is derived from `REFLECTION_TIMEOUT` because
-that lookup is the slowest way a start can fail, and it is a parameter so tests pass zero.
-It is a plain observation window, not a race being waited out: nothing gets faster by polling.
+A returned `restart` is not a running service: the unit is `Type=exec`, so its start job
+completes at `execve`, before the process has bound anything, and an atlas told to bind a port
+another one already holds exits a moment later with `restart` still succeeding. Nothing here
+watches for that, because watching means an observation window to wait out and an
+`ActiveState` to interpret, and the journal answers it either way. So `_report` reports the
+restart and names `journalctl` for what came of it, rather than claiming the port is served.
+Don't let that report grow back into a claim about the process without the read-back to
+support it.
 
 A `Unit` is everything that can differ between two atlases on one machine, and `converge`
 takes one rather than the settings loose, so adding an install-time setting is a field rather

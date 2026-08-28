@@ -13,7 +13,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import re
 import sys
@@ -21,24 +20,14 @@ from collections.abc import Awaitable
 from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import timedelta
 from pathlib import Path
 from typing import Final
 
 from exe_dev_atlas.processes import Ran
 from exe_dev_atlas.processes import inheriting
 from exe_dev_atlas.processes import run
-from exe_dev_atlas.reflection import REFLECTION_TIMEOUT
 
 SERVICE: Final = "exe-dev-atlas"
-
-# How long a restarted unit is watched before the install says it is running. The unit is
-# `Type=exec`, whose start job completes as soon as `execve` returns: a `restart` succeeds
-# against a process that is about to exit because the port is already held, and reporting from
-# that alone is how an install comes to claim a service that never bound anything. The window
-# covers the slowest failure the atlas has, which is its reflection lookup timing out before
-# the process gives up, and everything quicker lands well inside it.
-SETTLE: Final = REFLECTION_TIMEOUT + timedelta(seconds=2)
 
 # What may follow the package name in a unit's own name. systemd accepts more than this, and
 # the rest is not worth what it costs to read: a `.` renders as a second filename extension,
@@ -122,22 +111,10 @@ class Unit:
 
 @dataclass(frozen=True, slots=True)
 class Converged:
-    """
-    What an install actually changed, which on most runs is nothing, and what came of it.
-
-    `state` is systemd's own `ActiveState` for the unit, read once the restart has had time to
-    fail. It is carried rather than reduced to a bool because `failed` and `activating` are
-    different things to be told: the first is a service that gave up, the second one caught
-    between restarts, and an operator reading either wants the word systemd used.
-    """
+    """What an install actually changed, which on most runs is nothing."""
 
     unit: Unit
     text_changed: bool
-    state: str
-
-    @property
-    def is_running(self) -> bool:
-        return self.state == "active"
 
 
 class BadSuffix(ValueError):
@@ -246,7 +223,7 @@ async def is_lingering(user: str) -> bool:
     return shown.ok and shown.stdout.strip().endswith("=yes")
 
 
-async def converge(unit: Unit, systemctl: Systemctl, settle: timedelta = SETTLE) -> Converged:
+async def converge(unit: Unit, systemctl: Systemctl) -> Converged:
     """
     Make this unit match this interpreter: the file it is written from, and the code it runs.
 
@@ -268,12 +245,11 @@ async def converge(unit: Unit, systemctl: Systemctl, settle: timedelta = SETTLE)
     `--now`: `restart` starts a loaded unit that is not running, so a second way of starting
     it would be redundant.
 
-    A `restart` that returns is not a service that is running, and the difference is the other
-    half of the same lie: the unit is `Type=exec`, so its start job completes at `execve` and
-    succeeds against a process that exits a moment later because something else already holds
-    the port. So the state is read back after `settle`, which is a plain observation window
-    rather than a race being waited out, and long enough that a start which is going to fail
-    has failed inside it. Tests pass zero.
+    What this does not say is whether the service is *running*: the unit is `Type=exec`, so
+    the start job completes at `execve` and a `restart` succeeds against a process that exits
+    a moment later because something else already holds the port. Watching for that is a
+    window to wait out and a state to interpret, and it is the journal's answer either way, so
+    `main` names the journal rather than making a claim it cannot support.
 
     Every call names `unit.service`, so an install reaches exactly the one unit it rendered
     and any other atlas on the machine goes on running untouched.
@@ -284,10 +260,7 @@ async def converge(unit: Unit, systemctl: Systemctl, settle: timedelta = SETTLE)
 
     (await systemctl(("enable", unit.service))).checked()
     (await systemctl(("restart", unit.service))).checked()
-
-    await asyncio.sleep(settle.total_seconds())
-    shown = (await systemctl(("show", unit.service, "--property=ActiveState", "--value"))).checked()
-    return Converged(unit=unit, text_changed=changed, state=shown.stdout.strip())
+    return Converged(unit=unit, text_changed=changed)
 
 
 def write_unit(path: Path, wanted: str) -> bool:

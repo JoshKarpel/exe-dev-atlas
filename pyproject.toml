@@ -5,7 +5,7 @@ build-backend = "uv_build"
 [project]
 name = "exe-dev-atlas"
 version = "0.2.0"
-description = "A front door for an exe.dev VM: what is listening, what it is, and what to open."
+description = "A port explorer for an exe.dev VM: which ports are bound, what process bound them, and links to access them, as a web page served from the VM itself."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

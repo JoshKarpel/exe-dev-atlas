@@ -13,6 +13,11 @@
   hostname the browser actually reached is still in the header, quieter, because through a
   tunnel that is `localhost` and names no VM at all.
 
+- **`install` says where to look for what came of the restart.** `systemctl restart` returns
+  once the process has been launched rather than once it has bound anything, so an install
+  reports the restart it performed and names `journalctl --user -u <unit> -e` for whether the
+  service stayed up, rather than announcing a port as served on the strength of a start job.
+
 - **The VM's name is a requirement, not a decoration.** exe.dev's reflection integration is
   read before the server binds anything, and `exe-dev-atlas` now refuses to start if it does
   not answer: everything the page says about which box you are looking at is that one lookup,
@@ -59,15 +64,6 @@
   into a path under `~/.config/systemd/user`. Each install needs its own `--port`, since
   nothing stops two units from being told to bind the same one. A unit's `Description` now
   names the port it serves, so `systemctl --user list-units` tells two of them apart.
-
-### Fixed
-
-- **`install` no longer reports a service that never started as running.** The unit is
-  `Type=exec`, so `systemctl restart` returns once the process has been launched rather than
-  once it has bound anything, and an install that reported from that alone said "serving on
-  port 8000" over a process that had already exited because something else held the port. It
-  now waits, asks systemd for the unit's `ActiveState`, and either names the port or names the
-  state it found and exits non-zero, pointing at the journal for the reason.
 
 ## 0.1.0
 

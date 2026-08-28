@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import shlex
 import sys
-from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -11,8 +10,6 @@ from typer.testing import CliRunner
 from exe_dev_atlas import app
 from exe_dev_atlas.install import SERVICE
 from exe_dev_atlas.install import BadSuffix
-from exe_dev_atlas.install import Converged
-from exe_dev_atlas.install import Systemctl
 from exe_dev_atlas.install import Unit
 from exe_dev_atlas.install import can_run_the_atlas
 from exe_dev_atlas.install import config_home
@@ -48,17 +45,11 @@ def unit_for(
 
 
 class FakeSystemctl:
-    """
-    Records what was asked, so convergence is testable with no service manager present.
+    """Records what was asked, so convergence is testable with no service manager present."""
 
-    `state` is what a `show` is answered with, which is how a test says whether the service
-    that was just restarted is still up a moment later.
-    """
-
-    def __init__(self, *, fails: str = "", state: str = "active") -> None:
+    def __init__(self, *, fails: str = "") -> None:
         self.calls: list[tuple[str, ...]] = []
         self._fails = fails
-        self._state = state
 
     async def __call__(self, arguments: tuple[str, ...]) -> Ran:
         self.calls.append(arguments)
@@ -66,7 +57,7 @@ class FakeSystemctl:
         return Ran(
             command=("systemctl", "--user", *arguments),
             exit_code=1 if failed else 0,
-            stdout=f"{self._state}\n" if arguments[0] == "show" else "",
+            stdout="",
             stderr="refused" if failed else "",
             timed_out=False,
         )
@@ -74,16 +65,6 @@ class FakeSystemctl:
     @property
     def verbs(self) -> list[str]:
         return [call[0] for call in self.calls]
-
-
-async def converge_now(unit: Unit, systemctl: Systemctl) -> Converged:
-    """
-    Converge with no settle window, since there is no service here to watch fail.
-
-    The window is what a real install spends letting a `Type=exec` start fail before it
-    reports the service running; a fake answers the same thing whenever it is asked.
-    """
-    return await converge(unit, systemctl, settle=timedelta(0))
 
 
 class TestUnitText:
@@ -261,18 +242,18 @@ class TestConverge:
         unit = unit_for(tmp_path)
         systemctl = FakeSystemctl()
 
-        converged = await converge_now(unit, systemctl)
+        converged = await converge(unit, systemctl)
 
         assert converged.text_changed is True
         assert unit.path.read_text() == unit.text
-        assert systemctl.verbs == ["daemon-reload", "enable", "restart", "show"]
+        assert systemctl.verbs == ["daemon-reload", "enable", "restart"]
 
     async def test_an_unchanged_unit_is_not_rewritten_and_the_manager_is_not_reloaded(self, tmp_path: Path) -> None:
         unit = unit_for(tmp_path)
-        await converge_now(unit, FakeSystemctl())
+        await converge(unit, FakeSystemctl())
 
         systemctl = FakeSystemctl()
-        converged = await converge_now(unit, systemctl)
+        converged = await converge(unit, systemctl)
 
         assert converged.text_changed is False
         assert "daemon-reload" not in systemctl.verbs
@@ -282,43 +263,43 @@ class TestConverge:
         # identical unit, so only the restart puts the new code in front of anything. A
         # difference-gated restart would report success while serving the old build.
         unit = unit_for(tmp_path)
-        await converge_now(unit, FakeSystemctl())
+        await converge(unit, FakeSystemctl())
 
         systemctl = FakeSystemctl()
-        await converge_now(unit, systemctl)
+        await converge(unit, systemctl)
 
-        assert systemctl.verbs == ["enable", "restart", "show"]
+        assert systemctl.verbs == ["enable", "restart"]
 
     async def test_changing_the_port_rewrites_the_unit_and_reloads(self, tmp_path: Path) -> None:
-        await converge_now(unit_for(tmp_path, port=8123), FakeSystemctl())
+        await converge(unit_for(tmp_path, port=8123), FakeSystemctl())
 
         systemctl = FakeSystemctl()
         moved = unit_for(tmp_path, port=9001)
-        converged = await converge_now(moved, systemctl)
+        converged = await converge(moved, systemctl)
 
         assert converged.text_changed is True
         assert "--port 9001" in moved.path.read_text()
-        assert systemctl.verbs == ["daemon-reload", "enable", "restart", "show"]
+        assert systemctl.verbs == ["daemon-reload", "enable", "restart"]
 
     async def test_withdrawing_the_vs_code_link_rewrites_the_unit_and_reloads(self, tmp_path: Path) -> None:
         # `install --no-vs-code-link` on a machine already running with the link is the whole
         # way the flag reaches the service, so a rendering that dropped it would report a
         # successful install and go on serving the link.
-        await converge_now(unit_for(tmp_path, vscode_link=True), FakeSystemctl())
+        await converge(unit_for(tmp_path, vscode_link=True), FakeSystemctl())
 
         systemctl = FakeSystemctl()
         withheld = unit_for(tmp_path, vscode_link=False)
-        converged = await converge_now(withheld, systemctl)
+        converged = await converge(withheld, systemctl)
 
         assert converged.text_changed is True
         assert "--no-vs-code-link" in withheld.path.read_text()
-        assert systemctl.verbs == ["daemon-reload", "enable", "restart", "show"]
+        assert systemctl.verbs == ["daemon-reload", "enable", "restart"]
 
     async def test_changing_the_interpreter_rewrites_the_unit(self, tmp_path: Path) -> None:
-        await converge_now(unit_for(tmp_path), FakeSystemctl())
+        await converge(unit_for(tmp_path), FakeSystemctl())
 
         moved = unit_for(tmp_path, executable=Path("/opt/other/bin/python"))
-        converged = await converge_now(moved, FakeSystemctl())
+        converged = await converge(moved, FakeSystemctl())
 
         assert converged.text_changed is True
         assert "/opt/other/bin/python" in moved.path.read_text()
@@ -328,11 +309,11 @@ class TestConverge:
         # one reaches its own unit alone. A rendering that kept the default service name
         # would overwrite the file and restart the service somebody else's dotfiles own.
         default = unit_for(tmp_path)
-        await converge_now(default, FakeSystemctl())
+        await converge(default, FakeSystemctl())
 
         systemctl = FakeSystemctl()
         beside = unit_for(tmp_path, service=service_name("dev"), port=9001)
-        converged = await converge_now(beside, systemctl)
+        converged = await converge(beside, systemctl)
 
         assert converged.text_changed is True
         assert beside.path.read_text() == beside.text
@@ -341,49 +322,29 @@ class TestConverge:
             ("daemon-reload",),
             ("enable", "exe-dev-atlas-dev"),
             ("restart", "exe-dev-atlas-dev"),
-            ("show", "exe-dev-atlas-dev", "--property=ActiveState", "--value"),
         ]
 
     async def test_enabling_is_unconditional_so_an_unenabled_unit_is_always_fixed(self, tmp_path: Path) -> None:
         unit = unit_for(tmp_path)
-        await converge_now(unit, FakeSystemctl())
+        await converge(unit, FakeSystemctl())
 
         systemctl = FakeSystemctl()
-        await converge_now(unit, systemctl)
+        await converge(unit, systemctl)
 
         assert ("enable", SERVICE) in systemctl.calls
 
     async def test_the_parent_directory_is_created_when_it_does_not_exist(self, tmp_path: Path) -> None:
         unit = unit_for(tmp_path / "never" / "existed")
 
-        await converge_now(unit, FakeSystemctl())
+        await converge(unit, FakeSystemctl())
 
         assert unit.path.is_file()
 
-    async def test_a_service_that_is_up_after_the_restart_is_reported_as_running(self, tmp_path: Path) -> None:
-        converged = await converge_now(unit_for(tmp_path), FakeSystemctl(state="active"))
-
-        assert converged.state == "active"
-        assert converged.is_running is True
-
-    @pytest.mark.parametrize("state", ["failed", "activating", "inactive", ""])
-    async def test_a_service_that_did_not_stay_up_is_not_reported_as_running(self, tmp_path: Path, state: str) -> None:
-        # The gap this closes: the unit is `Type=exec`, so its start job completes at `execve`
-        # and a `restart` succeeds against a process that exits a moment later, which is what
-        # a second atlas told to bind a port the first one already holds does. Reporting from
-        # the restart alone is how an install comes to claim a service that never bound
-        # anything. `activating` is the crash loop caught between attempts, and an empty state
-        # is systemd answering about a unit it does not know.
-        converged = await converge_now(unit_for(tmp_path), FakeSystemctl(state=state))
-
-        assert converged.state == state
-        assert converged.is_running is False
-
-    @pytest.mark.parametrize("verb", ["daemon-reload", "enable", "restart", "show"])
+    @pytest.mark.parametrize("verb", ["daemon-reload", "enable", "restart"])
     async def test_a_systemctl_refusal_is_raised_rather_than_reported_as_success(
         self, tmp_path: Path, verb: str
     ) -> None:
         # An install that swallowed these would tell the operator the service is running
         # when it is not, which is the one thing this command must never do.
         with pytest.raises(Exception, match="exited 1"):
-            await converge_now(unit_for(tmp_path), FakeSystemctl(fails=verb))
+            await converge(unit_for(tmp_path), FakeSystemctl(fails=verb))
