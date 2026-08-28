@@ -3,6 +3,8 @@ const empty = document.getElementById("empty");
 const state = document.getElementById("state");
 const workspaces = document.getElementById("workspaces");
 const favicon = document.getElementById("favicon");
+const emblem = document.getElementById("emblem");
+const vm = document.getElementById("vm");
 document.getElementById("host").textContent = location.hostname;
 
 // The digits that open a link, which bounds how many rows can carry one. The
@@ -37,7 +39,7 @@ function linkFor(row, ownPort) {
   // one named in the path, so linking its root would litter the box with an
   // empty session per visit. The chips below are the way in: the existing
   // sessions, and one link that asks for a new one on purpose.
-  if (row.is_session_server) return null;
+  if (row.sessions) return null;
   return urlFor(row.port, "");
 }
 
@@ -89,10 +91,21 @@ function applyIdentity(payload) {
   if (current === identity) return;
   identity = current;
 
-  // The VM's own name where reflection knew it, otherwise whatever hostname got
-  // us here, which through a tunnel is `localhost` but still tells the reader
-  // which tab is which.
-  document.title = "Atlas - " + (payload.vm_name || location.hostname);
+  // The VM's own name, which the shell already rendered, or whatever hostname got
+  // us here where reflection knew of none: through a tunnel that is `localhost`,
+  // which still tells the reader which tab is which.
+  document.title = payload.vm_name || location.hostname;
+
+  // The VM's emoji is the heading, which is what makes two of these tabs tell
+  // themselves apart at a glance. The shell's "Atlas" stands where there is no
+  // emoji to put in its place, off exe.dev or where reflection did not answer.
+  if (payload.vm_emoji) emblem.textContent = payload.vm_emoji;
+
+  // The name the VM is known by, which is what the reader is here to identify.
+  // Hidden rather than blank where reflection did not answer, so the hostname
+  // beside it does not sit behind an empty gap.
+  vm.hidden = !payload.vm_name;
+  vm.textContent = payload.vm_name;
 
   // The VM's emoji as the tab icon, drawn as SVG text so there is no image to
   // fetch or generate. dominant-baseline rather than a dy nudge, since the glyph
@@ -113,8 +126,8 @@ function applyIdentity(payload) {
       );
   }
 
-  // Absent for anyone but the owner, and off exe.dev, where there is no
-  // <vm>.exe.xyz for Remote-SSH to reach.
+  // Absent where the link was turned off at install, and off exe.dev, where
+  // there is no <vm>.exe.xyz for Remote-SSH to reach.
   workspaces.hidden = !payload.vscode_url;
   workspaces.innerHTML = "";
   if (payload.vscode_url) {
@@ -179,7 +192,7 @@ function render(payload) {
     const badges = [];
     if (row.port === payload.own_port) badges.push(["this page", "badge here"]);
     if (row.is_http === false) badges.push(["no http", "badge"]);
-    if (row.is_session_server) badges.push(["session server", "badge"]);
+    if (row.sessions) badges.push(["session server", "badge"]);
     badges.forEach(([text, className]) => {
       const span = document.createElement("span");
       span.className = className;
@@ -218,11 +231,10 @@ function render(payload) {
       meta.appendChild(span);
     });
 
-    // Sessions arrive only for the VM's owner, so this is absent rather than
-    // empty for everyone else and the row renders as any other port would. The
-    // list can be empty where the server is serving none, which is the case the
+    // Absent on every row but a zellij web server's, where it can still be empty
+    // because the server is serving no sessions. That empty list is the case the
     // new-session link exists for, so the presence of the field rather than its
-    // length is what decides whether the owner gets these at all.
+    // length is what decides whether these are drawn at all.
     const sessions = li.querySelector(".sessions");
     sessions.innerHTML = "";
     if (row.sessions) {

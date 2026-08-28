@@ -1,8 +1,7 @@
-# exe.dev's reflection integration: how a VM learns its own name and who owns it.
+# exe.dev's reflection integration: how a VM learns its own name.
 #
-# Every answer here is read once at startup rather than per request. Each is a remote call,
-# one of them decides an authorization question, and neither changes over the life of a
-# process.
+# Read once at startup rather than per request: it is a remote call, and the answer does not
+# change over the life of a process.
 
 from __future__ import annotations
 
@@ -16,9 +15,8 @@ from without_async import timeout
 from without_http import Client
 from without_http import request
 
-# Reflection is an exe.dev default integration. `/email` is the address the VM is owned by;
-# the root document carries its name and emoji.
-OWNER_URL: Final = "https://reflection.int.exe.xyz/email"
+# Reflection is an exe.dev default integration, and its root document carries the VM's name
+# and emoji.
 REFLECTION_URL: Final = "https://reflection.int.exe.xyz/"
 
 REFLECTION_TIMEOUT: Final = timedelta(seconds=5)
@@ -45,43 +43,34 @@ class Vm:
     emoji: str
 
 
-async def _published(client: Client, url: str) -> dict[str, object]:
+# What a VM that reflection could not describe is, so every way that lookup fails answers with
+# one value rather than three constructions of the same blanks.
+UNNAMED: Final = Vm(name="", emoji="")
+
+
+async def read_vm(client: Client) -> Vm:
     """
-    One reflection document, or an empty one if it did not answer.
+    The VM's own name and emoji, or empty strings if reflection did not answer.
 
-    Empty is the honest answer rather than a guess, and every caller here is written to
-    treat it as one: the page falls back to the hostname the browser used, keeps the
-    built-in favicon, offers no VS Code link, and discloses nothing.
+    Empty is the honest answer rather than a guess, and the page is written to treat it as
+    one: it falls back to the hostname the browser used, keeps the built-in favicon, and
+    offers no VS Code link.
 
-    "Did not answer" has to cover every way this can fail, because these run inside the
+    "Did not answer" has to cover every way this can fail, because it runs inside the
     lifespan and anything that escapes takes the whole startup with it: with `Restart=always`
-    the service then restarts every five seconds rather than serving the public view. A
+    the service then restarts every five seconds rather than serving an unnamed page. A
     connection dropped mid-response arrives as h11's `RemoteProtocolError` rather than as an
     `OSError`, and a body that is not JSON as a `JSONDecodeError`, which is a `ValueError`.
     """
     try:
-        async with timeout(REFLECTION_TIMEOUT), request(client, "GET", url) as (head, body):
+        async with timeout(REFLECTION_TIMEOUT), request(client, "GET", REFLECTION_URL) as (head, body):
             if head.status != 200:
-                return {}
+                return UNNAMED
             published = json.loads(await body.read())
     except OSError, TimeoutError, ValueError, h11.RemoteProtocolError:
-        return {}
-    return published if isinstance(published, dict) else {}
-
-
-async def read_owner_email(client: Client) -> str:
-    """
-    The address this VM is owned by, or "" if reflection did not answer.
-
-    An empty answer denies rather than defaults: nothing is disclosed on the strength of a
-    query that failed.
-    """
-    return str((await _published(client, OWNER_URL)).get("email") or "")
-
-
-async def read_vm(client: Client) -> Vm:
-    """The VM's own name and emoji, or empty strings if reflection did not answer."""
-    published = await _published(client, REFLECTION_URL)
+        return UNNAMED
+    if not isinstance(published, dict):
+        return UNNAMED
     return Vm(name=str(published.get("name") or ""), emoji=str(published.get("emoji") or ""))
 
 

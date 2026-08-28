@@ -22,9 +22,8 @@ with every experiment. The suffix and the port are variables at the top of the `
 
 The README's screenshots are generated, not hand-taken, so a change to `page.py`, `atlas.css`,
 or `atlas.js` that alters the layout means running `just screenshot` in the same change. It
-serves its own atlas, reads the owner address from reflection so the shot carries the owner
-view, and writes both colour schemes; `--public` withholds the session names and the VS Code
-link. Its playwright dependency is in a PEP 723 header rather than the dev group, because CI
+serves its own atlas and writes both colour schemes.
+Its playwright dependency is in a PEP 723 header rather than the dev group, because CI
 syncs that group and this is 140 MB of browser driver.
 
 `pytest` runs under `xdist` (`-n auto`), `pytest-randomly`, and a 10-second per-test
@@ -74,22 +73,21 @@ socket and reads this very process, and every listener fact under it comes from 
 
 ## Architecture
 
-### One scan loop, two payloads, one authorization decision
+### One scan loop, one payload, no authorization decision
 
-`app.build_app` is the composition root. Its lifespan builds an `Atlas` (a `Broadcast`, the
-owner's email, the pre-rendered page `Response`) once, then binds `scan.scan_forever` to the
-server's lifetime with `background_task`. Handlers see nothing but the `Atlas`.
+`app.build_app` is the composition root. Its lifespan builds an `Atlas` (a `Broadcast` and the
+pre-rendered page `Response`) once, then binds `scan.scan_forever` to the server's lifetime
+with `background_task`. Handlers see nothing but the `Atlas`.
 
 `scan_once` reads the machine and publishes: `read_listeners` for sockets, `read_process` for
 the processes behind them, `zellij list-sessions` for session servers, gathered rather than
 awaited in turn so one hung session server does not hold every row behind its timeout. The
 first two are synchronous inside an async loop on purpose: both are `/proc` reads, memory
 formatting with no device behind it to block on, and at a few milliseconds once a second
-`asyncio.to_thread` would cost more in dispatch than the reads take. It serializes **two** JSON
-payloads, a public one and an owner one carrying zellij session names and the VS Code link,
-and hands both to `Broadcast.publish`, which only bumps its version when the pair differs
-from the last. Both are built every scan even with no owner connected, because the diff is
-against the pair.
+`asyncio.to_thread` would cost more in dispatch than the reads take. It serializes one JSON
+payload and hands it to `Broadcast.publish`, which only bumps its version when the payload
+differs from the last, so a quiet box pushes nothing. Serializing there rather than in the
+handler is what makes the cost one per scan however many connections are held.
 
 `scan_forever` is the cadence around it, and it must **not** die on a bad scan: nothing
 watches this task, so a page holding the last payload keeps its heartbeated connection and
@@ -112,16 +110,14 @@ the moment that happens. A socket owned by another user arrives with `pid=None`,
 `/proc/<pid>/fd` is not ours to read, so several of those on one port do collapse into one
 row.
 
-Which payload a connection gets is decided in `app.events`, the only place holding the
-caller's headers. `app.is_owner` compares exe.dev's `x-exedev-email` header against the
-owner address read from reflection at startup, and **fails closed**: both sides must be
-non-empty, so a failed reflection lookup or an unauthenticated caller yields `""`, which
-matches nobody. A box whose lookup failed serves the public view until restarted. The *last*
-header value wins, because a proxy that appends leaves the client's own value first.
-
-Only the proxy authenticates anyone, so a caller that reaches the port without that hop is
-believed. The README says so where somebody deciding how to share a VM will read it, and the
-public payload carries every command line on the box, which is the real reason it matters.
+Every connection is served the same payload, and the app reads no header to decide anything.
+There was an owner-only half once, holding zellij session names and the VS Code link behind
+exe.dev's `x-exedev-email`; it withheld nothing that was not already reachable, since the
+session server it named sits on the same proxied hostname under the same sharing grant and
+the VS Code link needs SSH access to be worth anything. What protects this page is the VM's
+sharing settings and nothing else, which is what the README says where somebody deciding how
+to share a VM will read it. Every command line on the box crosses the wire, so a feature that
+re-splits the payload by caller is answering the wrong question.
 
 ### What must not cross the wire
 
@@ -194,7 +190,7 @@ service manager.
 
 ### Functional core
 
-`group_listeners`, `build_row`, `Row.as_dict`, `is_owner`, `Unit.text`, `service_name`, `is_zellij_web`,
+`group_listeners`, `build_row`, `Row.as_dict`, `Unit.text`, `service_name`, `is_zellij_web`,
 `format_probe_title`, `probe_address`, `probe_url`, and `page.shell` are pure and tested
 directly. The I/O shell around them is thin: `processes.run` returns a `Ran` value (a timeout
 and a cancellation both kill the child; a timeout is an outcome rather than an exception, and
@@ -220,14 +216,23 @@ name because it names a host to SSH to rather than one to fetch from.
 The `+ new session` link on a zellij web server's row is the only thing the page offers that
 creates something rather than pointing at what is already running, and both halves of keeping
 that honest live in `atlas.js`: it is never passed to `offer`, so none of the `1`-`9` digits
-reach it, and the row's own anchor stays inert as before. Its owner-only-ness is decided by
-the *presence* of `row.sessions` rather than its length, because a server serving nothing
-still hands the owner an empty list, and that is exactly the row the link is there for. So
-`scan_once` must keep emitting the key for every session server, empty tuple included.
+reach it, and the row's own anchor stays inert as before. `row.sessions` is what marks a row
+as a session server at all, by its *presence* rather than its length: a server serving nothing
+carries an empty list, and that is exactly the row the link is there for. So `scan_once` must
+keep emitting the key for every session server, empty tuple included.
 
-`page.py` server-renders only a constant shell (element ids the script looks up, two asset
-links). `app.build_router` serves `static/` from an `inventory` walked once at startup, so
-nothing may write into that directory while the process runs.
+`page.py` server-renders a shell that is constant for the process: the element ids the script
+looks up, two asset links, and the VM's name in `<title>`, which is not per-request because
+reflection answers once at startup. `app.build_router` serves `static/` from an `inventory`
+walked once at startup, so nothing may write into that directory while the process runs.
+
+The header is the VM's identity: `#emblem` holds its emoji and `#vm` its name, both from
+reflection and written by `applyIdentity` when the first payload lands. The shell renders
+"Atlas" into `#emblem` and hides `#vm`, which is what a box off exe.dev keeps, so neither is
+ever a blank gap. `#host` stays what it was, the hostname the reader actually reached: through
+a tunnel that is `localhost`, which identifies no VM, and is why the name beside it is read
+from reflection rather than from the URL. `atlas.js` rewrites the title for that same case,
+where reflection named no VM and only the browser knows what to call the box.
 
 The payload is JSON rendered by hand rather than HTML fragments swapped by htmx, which is the
 obvious thing to reach for over a stream like this one. htmx is a client for SSE, not an

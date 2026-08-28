@@ -1,12 +1,25 @@
 # exe-dev-atlas
 
 A port explorer for an [exe.dev](https://exe.dev) VM:
-which ports are bound, what process bound them, and links to access them.
+which ports are bound, what process bound them, and links to access them,
+as a web page served from the VM itself.
 
-exe.dev [forwards ports 3000-9999](https://exe.dev/docs/proxy#additional-ports)
-to `https://<vm>.exe.xyz:<port>/` with no configuration, so a dev server started on one already has a URL. What it has no way to tell you is which ports are live and what is on them.
-The atlas serves that list [on the port the bare hostname points at](https://exe.dev/docs/proxy#configuring-which-port-to-proxy) (or whatever other port you choose),
-so `https://<vm>.exe.xyz/` becomes a launcher for everything else on the box.
+exe.dev automaticaly [forwards ports 3000-9999](https://exe.dev/docs/proxy#additional-ports)
+to `https://<vm>.exe.xyz:<port>/`, so a server started on one already has a URL.
+`exe-dev-atlas` serves a lightweight page
+[on the port the bare hostname points at](https://exe.dev/docs/proxy#configuring-which-port-to-proxy) (or whatever other port you choose)
+with links to and information about programs that are listening on those ports,
+so that `https://<vm>.exe.xyz/` becomes a launcher for everything else on the box.
+
+This can be useful when ["multiplexing"](https://en.wikipedia.org/wiki/Multiplexing) multiple servers on the same VM.
+A typical use case might be development work where you want to simultaneously expose
+[terminal sessions](https://zellij.dev/documentation/web-client.html),
+[editor sessions](https://code.visualstudio.com/docs/remote/vscode-server),
+[a docs dev server](https://www.mkdocs.org/user-guide/cli/#mkdocs-serve),
+[your service](https://fastapi.tiangolo.com/deployment/manually/),
+and [your agent](https://exe.dev/docs/shelley/intro) all at the same time,
+and you want to have a convenient web UI to click into them
+instead of needing to remember and type the ports by hand.
 
 <!-- Absolute rather than repository-relative, because PyPI renders this file too: its renderer
      leaves a relative `src` alone, so the browser resolves it against pypi.org and gets a 404,
@@ -33,74 +46,30 @@ foreground. Both take `--port` (default 8000, also read from `EXE_DEV_ATLAS_PORT
 
 ## Security
 
-### Run this only on a VM you would hand somebody a shell on
+All the atlas provides is discoverability. It grants nothing, gates nothing, and changes no
+access control on the VM: exe.dev's proxy decides who reaches the box, every port in the
+proxied range was reachable by those people before this was installed, and the atlas
+authenticates nobody, so it serves the same page to everyone who gets that far.
 
-Every row carries a process's full command line, its working directory, its user, and its
-pid, and that is the *public* half of what this serves. Command lines routinely carry
-secrets: a `--backend-store-uri postgresql://user:hunter2@db/app`, an `--api-key`, a token
-in an argument. `/proc/<pid>/cmdline` is world-readable, so the listing covers other users'
-processes on the box too, whatever this daemon can and cannot read of them.
+What changes is how much work it takes to find things. A reader who would have had to guess a
+port number is handed the list, and the list is detailed: every row carries a process's full
+command line, its working directory, its user, and its pid.
 
-So this page is only as private as the VM it runs on, and exe.dev's
-[sharing](https://exe.dev/docs/sharing) controls are the only thing between it and a reader:
+So the VM's [sharing](https://exe.dev/docs/sharing) settings are the whole boundary, exactly
+as they were before, and the atlas is a reason to read them carefully:
 
 - **Never make a VM running the atlas public.** `share set-public <vm>` drops the login
-  requirement on the [proxied](https://exe.dev/docs/proxy) port, and an unauthenticated
-  caller sends no `x-exedev-email` header, so anybody who finds the hostname gets the page.
-- **Read a Web share as a share of every command line on the box.** `share add <vm> <email>`
-  grants access to the VM's HTTPS proxy, and this page is on it. Withholding the zellij
-  session names and the VS Code link from a non-owner is one degree less detail on the same
-  page, not confidentiality.
-- **The port itself is defended by nothing.** The header the owner check reads is added by
-  exe.dev's proxy. A caller that reaches the port without making that hop, an SSH tunnel or
-  another user on the box, sends whatever address it likes and is served the owner's view.
+  requirement on the [proxied](https://exe.dev/docs/proxy) port, so anybody who finds the
+  hostname gets the page and everything on it.
+- **Read a Web share as full access to every web server on the box.**
+  `share add <vm> <email>` grants access to the VM's HTTPS proxy, with all that implies about
+  what is listening on it: a dev server, a notebook, a Zellij web server that hands out a
+  terminal.
+- **The port itself is defended by nothing.** exe.dev's proxy is the only thing
+  authenticating anyone. A caller that reaches the port without making that hop, an SSH
+  tunnel or another user on the box, is served the page like everybody else.
 
 `share show <vm>` says who has access today.
-
-### What it shows
-
-One row per listening process in the proxied port range, pushed over SSE and updated within a
-second of anything changing. One port carries two rows where two processes hold it between
-them, one on loopback and one on a LAN address, since they are two services:
-
-- The port, linked, unless it is this page's own or it did not answer HTTP.
-- Whatever the port called itself: the `<title>` of the page it served, falling back to the
-  process name.
-- The process behind it, its working directory, its owner, and how long it has been up.
-- `1`-`9` open the first nine links from the keyboard.
-
-Listeners are found by polling, because the kernel offers no alternative: netlink's
-`inet_diag` answers a query rather than announcing a new socket, and `/proc/net/tcp` cannot be
-watched. A scan costs a few milliseconds, so it runs once a second and pushes only when the
-result differs from the last one.
-
-Links are built from the browser's own location rather than from the VM name, so they stay
-correct whether the page was reached through the exe.dev proxy or an SSH tunnel to the same
-port.
-
-### What only the owner sees
-
-The atlas is reachable by anyone the VM is shared with, so three things are withheld from
-everyone but the address the VM is owned by, as exe.dev's proxy reports it. This is a
-smaller distinction than it sounds, and the section above says what it does not cover:
-
-- **zellij session names**, which are often a project or a client name.
-- **the link that starts a new zellij session**, which is the one thing on the page that acts
-  on the box rather than pointing at something already running on it.
-- **the VS Code Remote-SSH link**, which only works for someone with SSH access anyway.
-
-Ownership is decided once at startup from exe.dev's reflection integration, and the
-comparison fails closed: a reflection lookup that did not answer and an unauthenticated caller
-both produce an empty address, and an empty address matches nobody. A box whose lookup failed
-therefore serves the public view to everyone until it is restarted.
-
-A zellij web server is the one port whose row is not itself a link. Arriving there without a
-session named in the path does not land on a picker, it creates a new session, so a row that
-opened its root would litter the box with an empty session per visit. The owner gets its
-existing sessions listed individually beneath the row instead, followed by a `+ new session`
-link that asks for that same behaviour on purpose. The row's own anchor stays inert and the
-new-session link takes no hotkey digit, so the one link on the page that creates something is
-reached only by clicking it.
 
 ## Beyond Port Exploration
 
@@ -162,8 +131,9 @@ deploys the changes, and it happens whether the unit changed or not.
 
 ### More than one atlas on a box
 
-`--systemd-unit-suffix` installs under a name of its own, so a second atlas sits beside the
-first instead of converging onto it:
+When working on `exe-dev-atlas` itself, it might be convenient to run it twice on the same VM.
+Therefore, the `--systemd-unit-suffix <suffix>` options installs the systemd unit under a
+suffixed name, so that a second atlas sits beside the first instead of overwriting it:
 
 ```console
 $ exe-dev-atlas install --systemd-unit-suffix dev --port 8001

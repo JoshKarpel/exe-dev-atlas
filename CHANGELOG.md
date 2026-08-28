@@ -2,22 +2,44 @@
 
 ## Unreleased
 
+### Changed
+
+- **The page names the VM rather than the program.** The heading is the VM's emoji, the name
+  beside it is the VM's own, and the tab is titled with that name alone, so a window full of
+  these says which box each one is instead of repeating a product name the reader already
+  knows. The title is rendered into the shell rather than written by the first event, since
+  reflection answers once at startup. The hostname the browser actually reached is still in
+  the header, quieter, because through a tunnel that is `localhost` and names no VM at all. A
+  box off exe.dev, or one whose reflection lookup did not answer, keeps the "Atlas" heading
+  and is titled by that hostname.
+
+### Removed
+
+- **The owner-only view.** Every caller is served the same page: zellij session names, the
+  new-session link, and the VS Code Remote-SSH link now reach anyone who can reach the atlas.
+  Withholding them protected nothing that was not already reachable: the zellij web server
+  they name is on the same proxied hostname under the same sharing grant, so a reader who
+  could see the row could already open the server and take a session, and the VS Code link
+  only works for someone who has SSH access anyway. What is gone with it is the
+  `x-exedev-email` check, the reflection lookup for the VM's owner, and the second payload
+  per scan. The README says plainly what is true instead: all the atlas provides is
+  discoverability, and the VM's sharing settings are the whole boundary.
+
 ### Added
 
 - **A way to start a zellij session from the page.** A `+ new session` link sits beside the
-  session list on a zellij web server's row, for the VM's owner alone, and appears even where
-  the server is serving no sessions at all, which is the case that previously dead-ended. It
-  is the one link on the page that acts on the box rather than pointing at something already
-  running on it, so it is drawn as an action rather than a destination and takes none of the
-  `1`-`9` digits: a session is created by a click that meant it, never by a stray keypress on
-  the row.
+  session list on a zellij web server's row, and appears even where the server is serving no
+  sessions at all, which is the case that previously dead-ended. It is the one link on the
+  page that acts on the box rather than pointing at something already running on it, so it is
+  drawn as an action rather than a destination and takes none of the `1`-`9` digits: a
+  session is created by a click that meant it, never by a stray keypress on the row.
 
 - **A way to turn the VS Code link off.** `serve` and `install` both take
   `--vs-code-link/--no-vs-code-link`, default on, and an install renders whichever was asked
   for into the unit's `ExecStart`, so the unit states the choice rather than inheriting the
-  command's default. With the link off the owner's payload carries an empty `vscode_url`,
-  which is already how a VM whose reflection lookup did not answer says there is no link to
-  offer, so the header renders the same either way.
+  command's default. With the link off the payload carries an empty `vscode_url`, which is
+  already how a VM whose reflection lookup did not answer says there is no link to offer, so
+  the header renders the same either way.
 
 - **More than one atlas on a machine.** `install --systemd-unit-suffix dev` converges
   `exe-dev-atlas-dev` rather than `exe-dev-atlas`, so a checkout can be installed and

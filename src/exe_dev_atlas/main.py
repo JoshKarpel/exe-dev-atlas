@@ -51,7 +51,7 @@ VsCodeLink = Annotated[
     typer.Option(
         "--vs-code-link/--no-vs-code-link",
         envvar="EXE_DEV_ATLAS_VS_CODE_LINK",
-        help="offer the VS Code Remote-SSH link under the header, which only the VM's owner is served",
+        help="offer the VS Code Remote-SSH link under the header",
     ),
 ]
 

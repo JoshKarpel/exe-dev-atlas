@@ -28,7 +28,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import subprocess
 import sys
@@ -49,11 +48,6 @@ SHOTS: Final = REPO / "docs"
 # and badges it `this page`, which is one of the things the shot is meant to show. Not the port
 # CLAUDE.md hands an agent for `just serve`, so a foreground atlas and a capture can coexist.
 DEFAULT_PORT: Final = 8765
-
-# The address exe.dev's proxy would report for the VM's owner, and the header it would report it
-# in. Sent so the shot carries the owner's view: zellij session names and the VS Code link.
-OWNER_URL: Final = "https://reflection.int.exe.xyz/email"
-CALLER_EMAIL_HEADER: Final = "x-exedev-email"
 
 # `main` is capped at 62rem, so this leaves a margin either side rather than cropping to the
 # content. Doubled on capture, since a README image is displayed at half its pixel width.
@@ -82,21 +76,6 @@ def install_browser() -> None:
     silently in well under a second, which is cheaper than any check written here.
     """
     subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-
-
-def owner_email() -> str:
-    """
-    The address this VM is owned by, per exe.dev's reflection integration, or "" off exe.dev.
-
-    Empty is not a failure. The atlas fails closed on an empty address, so the shot is then of
-    the public view, which is what a reader off exe.dev would be served anyway.
-    """
-    try:
-        with urllib.request.urlopen(OWNER_URL, timeout=5) as answer:
-            published = json.loads(answer.read())
-    except OSError, ValueError:
-        return ""
-    return str(published.get("email") or "") if isinstance(published, dict) else ""
 
 
 @contextmanager
@@ -136,14 +115,9 @@ def wait_until_answering(url: str, server: subprocess.Popen[bytes]) -> None:
     raise SystemExit(f"{url} did not answer within {STARTUP_TIMEOUT:.0f}s.")
 
 
-def capture(browser: Browser, url: str, scheme: str, into: Path, email: str) -> None:
+def capture(browser: Browser, url: str, scheme: str, into: Path) -> None:
     """One full-page shot in one colour scheme, taken once every row has been probed."""
-    context = browser.new_context(
-        viewport=VIEWPORT,
-        device_scale_factor=SCALE,
-        color_scheme=scheme,
-        extra_http_headers={CALLER_EMAIL_HEADER: email} if email else {},
-    )
+    context = browser.new_context(viewport=VIEWPORT, device_scale_factor=SCALE, color_scheme=scheme)
     try:
         page = context.new_page()
         page.goto(url, wait_until="domcontentloaded")
@@ -168,22 +142,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Capture the README's screenshots from this machine.")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="the port to serve the atlas on")
     parser.add_argument("--url", default="", help="shoot an atlas already running here instead of serving one")
-    parser.add_argument("--public", action="store_true", help="shoot the public view rather than the owner's")
     arguments = parser.parse_args()
 
     SHOTS.mkdir(parents=True, exist_ok=True)
     install_browser()
-
-    email = "" if arguments.public else owner_email()
-    if not email:
-        print("These are of the public view: no zellij session names, no VS Code link.")
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         try:
             with target(arguments.url, arguments.port) as url:
                 for scheme in ("light", "dark"):
-                    capture(browser, url, scheme, SHOTS / f"screenshot-{scheme}.png", email)
+                    capture(browser, url, scheme, SHOTS / f"screenshot-{scheme}.png")
         finally:
             browser.close()
 
