@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import shlex
 import sys
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+from exe_dev_atlas import app
 from exe_dev_atlas.install import SERVICE
 from exe_dev_atlas.install import BadSuffix
 from exe_dev_atlas.install import Converged
@@ -17,6 +20,7 @@ from exe_dev_atlas.install import converge
 from exe_dev_atlas.install import running_executable
 from exe_dev_atlas.install import service_name
 from exe_dev_atlas.install import unit_path
+from exe_dev_atlas.main import exe_dev_atlas
 from exe_dev_atlas.processes import Ran
 
 # Deliberately not this interpreter and not port 8000: a rendering that ignored its
@@ -36,7 +40,7 @@ def unit_for(
     """The unit an install would converge, under a config home a test may write into."""
     return Unit(
         service=service,
-        path=unit_path(config_home, service),
+        config_home=config_home,
         executable=executable,
         port=port,
         vscode_link=vscode_link,
@@ -129,6 +133,40 @@ class TestUnitText:
         text = unit_for(tmp_path, vscode_link=vscode_link).text
 
         assert f"ExecStart={INTERPRETER} -m exe_dev_atlas serve --port {PORT} {flag}" in text
+
+
+class TestTheUnitStartsACommandThisCliAccepts:
+    """
+    The `ExecStart` line, fed back through the CLI it names, arriving as the settings it came
+    from.
+
+    The unit spells `serve`'s options as literals in another module, and the assertions above
+    compare those literals against themselves: renaming `--vs-code-link` in `main.py` leaves
+    them green while every installed unit crash-loops on an unrecognised flag. Running the
+    rendered arguments through the real command is what makes that a failing test here rather
+    than a `failed` state the install reports and an operator reads the journal for.
+    """
+
+    @pytest.mark.parametrize("vscode_link", [True, False], ids=["link-on", "link-off"])
+    def test_the_rendered_arguments_parse_back_to_the_settings_that_rendered_them(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, vscode_link: bool
+    ) -> None:
+        unit = unit_for(tmp_path, port=9001, vscode_link=vscode_link)
+        asked: dict[str, object] = {}
+
+        def record(port: int, *, vscode_link: bool) -> None:
+            asked.update(port=port, vscode_link=vscode_link)
+
+        # Patched where `main.serve` looks the name up, and only so the command returns
+        # instead of binding a port: what is under test is the parse, not the server.
+        monkeypatch.setattr(app, "serve_until_stopped", record)
+
+        exec_start = next(line for line in unit.text.splitlines() if line.startswith("ExecStart="))
+        arguments = shlex.split(exec_start.removeprefix("ExecStart="))
+        result = CliRunner().invoke(exe_dev_atlas, arguments[arguments.index("serve") :])
+
+        assert result.exit_code == 0, result.output
+        assert asked == {"port": unit.port, "vscode_link": unit.vscode_link}
 
 
 class TestServiceName:

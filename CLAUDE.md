@@ -151,6 +151,11 @@ that was correct. `scan_once` reads the three payload fields off it with no `awa
 them, which is what makes a rename atomic from a reader's side. Adding anything else derived
 from the VM's name means adding it to `update`, not deriving it at a call site.
 
+The lookup itself reaches `refresh_forever` as an injected `ReadReflection`, bound once in
+`build_app` as `partial(reflection.read_reflection, pool)`, so the read that decides whether
+the process starts at all and every re-read after it are the same call. That is also what lets
+a test drive the loop over answers it wrote instead of replacing a name for the whole process.
+
 `workspace=None` on an `Identity` is how `--no-vs-code-link` is carried: the decision is made
 once in `build_app` and the rest of the program only ever sees an empty `vscode_url`.
 
@@ -219,6 +224,8 @@ A `Unit` is everything that can differ between two atlases on one machine, and `
 takes one rather than the settings loose, so adding an install-time setting is a field rather
 than another argument threaded through `main.install`. `unit.service` is what every
 `systemctl` call names, which is what keeps an install off every other unit on the box.
+`unit.path` is a property over `config_home` and that same name rather than a field beside it,
+so the file an install writes and the unit it restarts cannot be made to disagree.
 `service_name` is the only thing that builds one, and it **parses** rather than accepts: the
 suffix is interpolated into a filename under `~/.config/systemd/user`, so `../ssh-agent` has
 to be refused before anything is written. The package name is always the prefix, so

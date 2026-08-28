@@ -29,7 +29,6 @@ from exe_dev_atlas.install import is_lingering
 from exe_dev_atlas.install import running_executable
 from exe_dev_atlas.install import service_name
 from exe_dev_atlas.install import systemctl_for
-from exe_dev_atlas.install import unit_path
 
 # What exe.dev's proxy points the bare `https://<vm>.exe.xyz/` hostname at, which is the
 # whole reason this program has a default port at all: served here, the box's front door is
@@ -141,7 +140,7 @@ def install(
 
     unit = Unit(
         service=service,
-        path=unit_path(config_home(os.environ), service),
+        config_home=config_home(os.environ),
         executable=executable,
         port=port,
         vscode_link=vscode_link,

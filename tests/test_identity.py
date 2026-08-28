@@ -5,10 +5,7 @@ import logging
 from datetime import timedelta
 
 import pytest
-from without_http import Client
-from without_http import ConnectionPool
 
-from exe_dev_atlas import reflection
 from exe_dev_atlas.identity import Identity
 from exe_dev_atlas.identity import refresh_forever
 from exe_dev_atlas.reflection import Reflection
@@ -70,7 +67,7 @@ class Answering:
         self.answer = answer
         self.calls: asyncio.Queue[None] = asyncio.Queue()
 
-    async def __call__(self, _client: Client) -> Reflection:
+    async def __call__(self) -> Reflection:
         await self.calls.put(None)
         if isinstance(self.answer, ReflectionFailed):
             raise self.answer
@@ -81,9 +78,9 @@ class Answering:
         await self.calls.get()
 
 
-async def refreshing(pool: ConnectionPool, identity: Identity, answering: Answering) -> None:
+async def refreshing(identity: Identity, answering: Answering) -> None:
     """Run the refresh loop against `answering` until it has answered twice, then stop it."""
-    loop = asyncio.ensure_future(refresh_forever(pool, identity, interval=SOON))
+    loop = asyncio.ensure_future(refresh_forever(answering, identity, interval=SOON))
     try:
         async with asyncio.timeout(5):
             await answering.called_twice()
@@ -92,14 +89,11 @@ async def refreshing(pool: ConnectionPool, identity: Identity, answering: Answer
         await asyncio.gather(loop, return_exceptions=True)
 
 
-async def test_a_vm_renamed_under_a_running_server_reaches_its_own_page(
-    monkeypatch: pytest.MonkeyPatch, pool: ConnectionPool
-) -> None:
+async def test_a_vm_renamed_under_a_running_server_reaches_its_own_page() -> None:
     identity = Identity(NAMED, workspace=WORKSPACE)
     answering = Answering(RENAMED)
-    monkeypatch.setattr(reflection, "read_reflection", answering)
 
-    await refreshing(pool, identity, answering)
+    await refreshing(identity, answering)
 
     assert identity.vm == RENAMED
     assert b"<title>nimbus</title>" in identity.page.body
@@ -107,17 +101,16 @@ async def test_a_vm_renamed_under_a_running_server_reaches_its_own_page(
 
 
 async def test_a_lookup_that_did_not_answer_leaves_the_last_good_name_standing(
-    monkeypatch: pytest.MonkeyPatch, pool: ConnectionPool, caplog: pytest.LogCaptureFixture
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     # Only a success writes. A blank heading is not a better description of this VM than a
     # name that was true when it was read, and the startup lookup is what guarantees there is
     # always one of those to keep.
     identity = Identity(NAMED, workspace=WORKSPACE)
     answering = Answering(ReflectionFailed("reflection is not answering"))
-    monkeypatch.setattr(reflection, "read_reflection", answering)
 
     with caplog.at_level(logging.WARNING, logger="exe_dev_atlas.identity"):
-        await refreshing(pool, identity, answering)
+        await refreshing(identity, answering)
 
     assert identity.vm == NAMED
     assert b"<title>cumulus</title>" in identity.page.body

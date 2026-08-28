@@ -10,19 +10,25 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable
+from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import timedelta
 
 from without_asgi import Response
-from without_http import Client
 
-from exe_dev_atlas import reflection
 from exe_dev_atlas.page import page_response
 from exe_dev_atlas.reflection import REFLECTION_INTERVAL
 from exe_dev_atlas.reflection import Reflection
 from exe_dev_atlas.reflection import ReflectionFailed
 from exe_dev_atlas.reflection import vscode_url
+
+# Asking reflection who this is, already bound to whatever it needs to ask over. Injected for
+# the same reason the scan's two machine reads are: a test drives the loop over answers it
+# wrote, without replacing a name for the whole process. Binding it once in `build_app` is
+# also what makes the startup read and every refresh after it the same call.
+type ReadReflection = Callable[[], Awaitable[Reflection]]
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +58,9 @@ class Identity:
         self.vscode_url = "" if self.workspace is None else vscode_url(vm.name, self.workspace)
 
 
-async def refresh_forever(client: Client, identity: Identity, interval: timedelta = REFLECTION_INTERVAL) -> None:
+async def refresh_forever(
+    read_reflection: ReadReflection, identity: Identity, interval: timedelta = REFLECTION_INTERVAL
+) -> None:
     """
     Re-read reflection on a slow cadence, and write only what it actually answered.
 
@@ -69,7 +77,7 @@ async def refresh_forever(client: Client, identity: Identity, interval: timedelt
     while True:
         await asyncio.sleep(interval.total_seconds())
         try:
-            identity.update(await reflection.read_reflection(client))
+            identity.update(await read_reflection())
         except ReflectionFailed as unanswered:
             logger.warning(f"Reflection did not answer and {identity.vm.name} stands: {unanswered!r}")
         except Exception:

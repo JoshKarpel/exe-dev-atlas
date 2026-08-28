@@ -85,10 +85,22 @@ class Unit:
     """
 
     service: str
-    path: Path
+    config_home: Path
     executable: Path
     port: int
     vscode_link: bool
+
+    @property
+    def path(self) -> Path:
+        """
+        The file this unit is written to, derived rather than carried beside the name.
+
+        `converge` writes this path and restarts `service`, so the two being one fact is what
+        keeps an install from writing one file and restarting a different unit. Held as a
+        field, that agreement would rest on every construction site remembering to pair them,
+        which is the failure `service_name`'s parsing already refuses one layer down.
+        """
+        return unit_path(self.config_home, self.service)
 
     @property
     def text(self) -> str:

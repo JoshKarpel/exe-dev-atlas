@@ -7,6 +7,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Final
 
@@ -124,7 +125,7 @@ async def _not_found(_atlas: Atlas) -> Response:
     return NOT_FOUND
 
 
-def build_app(port: int, *, vscode_link: bool = True) -> ASGIApp:
+def build_app(port: int, *, vscode_link: bool) -> ASGIApp:
     """
     The ASGI app, with the two loops that outlive a request bound to its lifespan.
 
@@ -146,16 +147,19 @@ def build_app(port: int, *, vscode_link: bool = True) -> ASGIApp:
     @asynccontextmanager
     async def lifespan() -> AsyncIterator[Atlas]:
         async with ConnectionPool() as pool:
-            identity = Identity(await reflection.read_reflection(pool), home_directory() if vscode_link else None)
+            # Bound once, so the read that decides whether this process starts at all and the
+            # reads that keep it current afterwards are the same call over the same pool.
+            read_reflection = partial(reflection.read_reflection, pool)
+            identity = Identity(await read_reflection(), home_directory() if vscode_link else None)
             atlas = Atlas(broadcast=Broadcast(), identity=identity)
             scan = scan_forever(atlas.broadcast, pool, read_listeners, read_process, port, identity)
-            async with background_task(scan), background_task(refresh_forever(pool, identity)):
+            async with background_task(scan), background_task(refresh_forever(read_reflection, identity)):
                 yield atlas
 
     return make_asgi_app(lifespan, http=router.dispatch)
 
 
-async def serve(port: int, host: str = "127.0.0.1", *, vscode_link: bool = True) -> None:
+async def serve(port: int, host: str = "127.0.0.1", *, vscode_link: bool) -> None:
     """
     Run until cancelled, which for the CLI means until a signal stops the process.
 
@@ -170,7 +174,7 @@ async def serve(port: int, host: str = "127.0.0.1", *, vscode_link: bool = True)
         raise DidNotStart(str(unstarted)) from unstarted
 
 
-def serve_until_stopped(port: int, host: str = "127.0.0.1", *, vscode_link: bool = True) -> None:
+def serve_until_stopped(port: int, host: str = "127.0.0.1", *, vscode_link: bool) -> None:
     try:
         asyncio.run(serve(port, host, vscode_link=vscode_link))
     except KeyboardInterrupt:
