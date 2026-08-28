@@ -51,8 +51,15 @@ it renders a wildcard bind as `*` on some builds and `[::]` on others, so `probe
 would be matching on a rendering rather than on an address. psutil answers `0.0.0.0` and `::`.
 It ships no `py.typed`, so `types-psutil` is a dev dependency; keep the two versions in step.
 
+`pydantic` parses exactly one thing: reflection's document, at the one boundary where bytes
+somebody else wrote enter this process. Nothing internal is a model. `Reflection` is both the
+parsed type and the value carried around, which the parse-don't-validate rule would normally
+split in two; here the fields are identical and one type is the simpler artifact.
+
 Python 3.14 only. The code uses unparenthesized multi-exception `except OSError, ValueError:`
-(PEP 758) in several places; that is valid 3.14 syntax, not the Python 2 bind form.
+(PEP 758) in several places; that is valid 3.14 syntax, not the Python 2 bind form. It is
+*not* usable with an `as` clause, which is why `reflection.read_reflection` parenthesizes its
+tuple.
 
 ## Releases
 
@@ -75,9 +82,10 @@ socket and reads this very process, and every listener fact under it comes from 
 
 ### One scan loop, one payload, no authorization decision
 
-`app.build_app` is the composition root. Its lifespan builds an `Atlas` (a `Broadcast` and the
-pre-rendered page `Response`) once, then binds `scan.scan_forever` to the server's lifetime
-with `background_task`. Handlers see nothing but the `Atlas`.
+`app.build_app` is the composition root. Its lifespan reads reflection, builds an `Atlas` (a
+`Broadcast` and an `Identity`) from the answer, and binds `scan.scan_forever` and
+`identity.refresh_forever` to the server's lifetime with `background_task`. Handlers see
+nothing but the `Atlas`.
 
 `scan_once` reads the machine and publishes: `read_listeners` for sockets, `read_process` for
 the processes behind them, `zellij list-sessions` for session servers, gathered rather than
@@ -96,9 +104,10 @@ retries; anything else is logged on the way out, since `background_task` surface
 exception only when the server shuts down. `main.serve` configures logging to stderr, which
 under the unit is the journal (`just logs`).
 
-`read_listeners` is injected into `scan_once` and `scan_forever` as a `ReadListeners`
-callable, so a test drives a scan over a listing it wrote rather than over whatever this
-machine is running.
+`read_listeners` and `read_process` are injected into `scan_once` and `scan_forever` as
+`ReadListeners` and `ReadProcess` callables, so a test drives a scan over a machine it wrote
+rather than over whatever this one is running. Both are needed together to reach the zellij
+branch at all, since what marks a row as a session server is the *process* behind a listener.
 
 Polling is deliberate, not a stopgap: the kernel offers no way to watch for a new listening
 socket.
@@ -118,6 +127,32 @@ the VS Code link needs SSH access to be worth anything. What protects this page 
 sharing settings and nothing else, which is what the README says where somebody deciding how
 to share a VM will read it. Every command line on the box crosses the wire, so a feature that
 re-splits the payload by caller is answering the wrong question.
+
+### The VM's name is required, and it lives in one place
+
+`reflection.read_reflection` runs in the lifespan before anything binds, and every way it can
+fail arrives as one `ReflectionFailed`. Nothing catches it there: the page is an index *of a
+named VM*, so a lookup that did not answer is a failed startup rather than a page rendered
+with blanks. Under the unit that is `Restart=always` retrying every five seconds with the
+reason in the journal, which is the loud version of the same fact and the deliberate opposite
+of the old `UNNAMED` fallback. `Reflection.name` therefore carries a `min_length=1` and is
+non-empty everywhere downstream, which is why `vscode_url` has no empty-name branch.
+
+An ASGI startup failure reaches the server as a *message*, not as the exception that caused
+it, so `app.serve` renames `LifespanError` to `DidNotStart` and `main.serve` prints that
+message and exits 1. Whatever is not in the `ReflectionFailed` message is not in the journal
+either.
+
+`identity.Identity` is the one mutable place in the program, and everything reflection feeds
+is rebuilt together in `update`: the page `Response` (its `<title>` and heading), and the
+Remote-SSH URL (which names the VM as an SSH host). `refresh_forever` writes there on success
+only, so a failed re-read leaves the last good answer standing rather than blanking a heading
+that was correct. `scan_once` reads the three payload fields off it with no `await` between
+them, which is what makes a rename atomic from a reader's side. Adding anything else derived
+from the VM's name means adding it to `update`, not deriving it at a call site.
+
+`workspace=None` on an `Identity` is how `--no-vs-code-link` is carried: the decision is made
+once in `build_app` and the rest of the program only ever sees an empty `vscode_url`.
 
 ### What must not cross the wire
 
@@ -171,6 +206,15 @@ never fetches or builds an environment. In `converge`, the `daemon-reload` is co
 the unit text changing but the `restart` is **unconditional**: an upgrade in place renders
 identical text, so the restart is the only thing that puts new code in front of anything.
 
+A returned `restart` is not a running service, and reporting from it alone is the same class
+of lie as the difference-gated restart above. The unit is `Type=exec`, so its start job
+completes at `execve`, before the process has bound anything: an atlas told to bind a port
+another one already holds exits a moment later and `restart` still succeeds. So `converge`
+waits `SETTLE`, reads `ActiveState` back, and carries it in `Converged`; `main` names the port
+or names the state and exits non-zero. `SETTLE` is derived from `REFLECTION_TIMEOUT` because
+that lookup is the slowest way a start can fail, and it is a parameter so tests pass zero.
+It is a plain observation window, not a race being waited out: nothing gets faster by polling.
+
 A `Unit` is everything that can differ between two atlases on one machine, and `converge`
 takes one rather than the settings loose, so adding an install-time setting is a field rather
 than another argument threaded through `main.install`. `unit.service` is what every
@@ -191,11 +235,13 @@ service manager.
 ### Functional core
 
 `group_listeners`, `build_row`, `Row.as_dict`, `Unit.text`, `service_name`, `is_zellij_web`,
-`format_probe_title`, `probe_address`, `probe_url`, and `page.shell` are pure and tested
-directly. The I/O shell around them is thin: `processes.run` returns a `Ran` value (a timeout
-and a cancellation both kill the child; a timeout is an outcome rather than an exception, and
-`.checked()` is the loud version), and reflection and process reads alike return empty values
-that every caller is written to treat as an honest "no answer".
+`format_probe_title`, `probe_address`, `probe_url`, `parse_reflection`, `vscode_url`, and
+`page.shell` are pure and tested directly. The I/O shell around them is thin: `processes.run`
+returns a `Ran` value (a timeout and a cancellation both kill the child; a timeout is an
+outcome rather than an exception, and `.checked()` is the loud version), and process reads
+return empty values that every caller is written to treat as an honest "no answer". Reflection
+is the exception and deliberately so: it raises, because there is no honest empty answer to
+the question of which VM this is.
 
 `read_listeners`, `read_process`, and `read_environ` are the psutil boundary, and nothing but
 `TestReadingThisMachine` pins the field names they ask for: those tests bind a real socket and
@@ -221,18 +267,25 @@ as a session server at all, by its *presence* rather than its length: a server s
 carries an empty list, and that is exactly the row the link is there for. So `scan_once` must
 keep emitting the key for every session server, empty tuple included.
 
-`page.py` server-renders a shell that is constant for the process: the element ids the script
-looks up, two asset links, and the VM's name in `<title>`, which is not per-request because
-reflection answers once at startup. `app.build_router` serves `static/` from an `inventory`
-walked once at startup, so nothing may write into that directory while the process runs.
+`page.py` server-renders a shell that is constant until the VM is renamed: the element ids the
+script looks up, two asset links, and the VM's name in both `<title>` and `#vm`. It is not
+per-request, so it is rendered once into a `Response` and served from that value; a rename
+replaces the whole `Response` rather than editing one. `app.build_router` serves `static/` from
+an `inventory` walked once at startup, so nothing may write into that directory while the
+process runs.
 
-The header is the VM's identity: `#emblem` holds its emoji and `#vm` its name, both from
-reflection and written by `applyIdentity` when the first payload lands. The shell renders
-"Atlas" into `#emblem` and hides `#vm`, which is what a box off exe.dev keeps, so neither is
-ever a blank gap. `#host` stays what it was, the hostname the reader actually reached: through
-a tunnel that is `localhost`, which identifies no VM, and is why the name beside it is read
-from reflection rather than from the URL. `atlas.js` rewrites the title for that same case,
-where reflection named no VM and only the browser knows what to call the box.
+The header is the VM's identity. `#vm` is the document's only `h1` and holds the name, because
+that is what the reader is here to identify and what a screen reader should announce as the
+heading; `#emblem` holds the emoji beside it, `aria-hidden` because a glyph in a heading
+announces as its own Unicode name, and `hidden` outright where reflection answered without
+one. `#host` is the hostname the reader actually reached: through a tunnel that is
+`localhost`, which identifies no VM, and is why the name beside it is read from reflection
+rather than from the URL.
+
+`applyIdentity` writes all of that again from each payload, which matters only for a rename,
+and returns early on a payload with no `vm_name`: the empty `{}` a connection gets before the
+first scan says nothing about the VM, and writing it would blank a header the shell rendered
+correctly.
 
 The payload is JSON rendered by hand rather than HTML fragments swapped by htmx, which is the
 obvious thing to reach for over a stream like this one. htmx is a client for SSE, not an

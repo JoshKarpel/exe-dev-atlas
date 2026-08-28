@@ -17,12 +17,16 @@ body {
 }
 main { max-width: 62rem; margin: 0 auto; }
 header { display: flex; align-items: baseline; gap: .75rem; margin-bottom: 1.25rem; }
-/* Sized for the VM's emoji, which the script writes here: a glyph reads smaller than
-   text at the same size, and this is the page's only mark. */
-h1 { font-size: 1.35rem; margin: 0; font-weight: 600; letter-spacing: -.01em; line-height: 1; }
-#vm { font-size: 1.2rem; font-weight: 600; letter-spacing: -.01em; }
+/* The VM's name, which is the heading. */
+h1 { font-size: 1.2rem; margin: 0; font-weight: 600; letter-spacing: -.01em; }
+/* Larger than the name it sits beside: a glyph reads smaller than text at the same
+   size, and this is the page's only mark. */
+#emblem { font-size: 1.35rem; line-height: 1; }
 #host { color: var(--dim); font-family: var(--mono); font-size: .8rem; }
-#workspaces {
+/* Scoped to the nav actually being shown, because the UA's `[hidden] { display: none }`
+   loses to an id selector: `#workspaces { display: flex }` would lay the nav out with
+   the attribute set, which is every page served with the VS Code link turned off. */
+#workspaces:not([hidden]) {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem;
   margin-bottom: .9rem;
 }

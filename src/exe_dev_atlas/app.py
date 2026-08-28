@@ -22,6 +22,7 @@ from without_asgi import with_heartbeat
 from without_async import background_task
 from without_async import sleep_forever
 from without_http import ConnectionPool
+from without_http import LifespanError
 from without_http import serving
 from without_web import Reply
 from without_web import Router
@@ -29,10 +30,12 @@ from without_web import get
 from without_web import handle
 from without_web import static_files
 
-from exe_dev_atlas import page
 from exe_dev_atlas import reflection
+from exe_dev_atlas.identity import Identity
+from exe_dev_atlas.identity import refresh_forever
 from exe_dev_atlas.listeners import home_directory
 from exe_dev_atlas.listeners import read_listeners
+from exe_dev_atlas.listeners import read_process
 from exe_dev_atlas.scan import Broadcast
 from exe_dev_atlas.scan import scan_forever
 
@@ -46,12 +49,22 @@ STATIC_PREFIX: Final = "/static"
 UNBUFFERED: Final = ((b"x-accel-buffering", b"no"),)
 
 
+class DidNotStart(RuntimeError):
+    """
+    The server never took traffic, carrying whatever the lifespan said about why.
+
+    A startup failure reaches an ASGI server as a message rather than as the exception that
+    caused it, so this exists to hand the CLI that message under a name of this program's own
+    instead of the web library's.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class Atlas:
     """Everything a request handler is allowed to see, assembled once before the first one."""
 
     broadcast: Broadcast
-    page: Response
+    identity: Identity
 
 
 async def payloads(broadcast: Broadcast) -> AsyncIterator[ServerSentEvent]:
@@ -83,7 +96,8 @@ async def events(atlas: Atlas) -> Reply:
 
 
 async def index(atlas: Atlas) -> Response:
-    return atlas.page
+    """The shell rendered from the VM's current name, which a rename replaces rather than edits."""
+    return atlas.identity.page
 
 
 def build_router() -> Router[Atlas]:
@@ -112,41 +126,48 @@ async def _not_found(_atlas: Atlas) -> Response:
 
 def build_app(port: int, *, vscode_link: bool = True) -> ASGIApp:
     """
-    The ASGI app, with the scan loop bound to its lifespan.
+    The ASGI app, with the two loops that outlive a request bound to its lifespan.
 
-    The scan runs for exactly as long as the server does: `background_task` starts it on
-    entry and cancels it on exit, so there is no thread to outlive a shutdown and no
-    lifetime to manage by hand.
+    Each runs for exactly as long as the server does: `background_task` starts it on entry and
+    cancels it on exit, so there is no thread to outlive a shutdown and no lifetime to manage
+    by hand. The scan reads the machine once a second; the refresh asks reflection whether
+    this VM is still called what it was called.
 
-    Whether to offer the VS Code link is settled here rather than carried any further in:
-    the scan loop is handed a URL and an empty one is already how it says there is no link
-    to offer, which is what a reflection lookup that did not answer produces anyway.
+    Reflection is read here, before anything binds, and a failure takes the startup with it.
+    That is deliberate: this page is an index *of a named VM*, and a process that cannot say
+    which box it is on has nothing honest to serve. Under the unit it restarts every five
+    seconds until the lookup answers, which is the loud version of the same fact.
+
+    Whether to offer the VS Code link is settled here rather than carried any further in: an
+    empty URL is already how the page is told there is no link to offer.
     """
     router = build_router()
 
     @asynccontextmanager
     async def lifespan() -> AsyncIterator[Atlas]:
         async with ConnectionPool() as pool:
-            vm = await reflection.read_vm(pool)
-            atlas = Atlas(broadcast=Broadcast(), page=page.page_response(vm.name))
-            scan = scan_forever(
-                atlas.broadcast,
-                pool,
-                read_listeners,
-                port,
-                vm,
-                reflection.vscode_url(vm.name, home_directory()) if vscode_link else "",
-            )
-            async with background_task(scan):
+            identity = Identity(await reflection.read_reflection(pool), home_directory() if vscode_link else None)
+            atlas = Atlas(broadcast=Broadcast(), identity=identity)
+            scan = scan_forever(atlas.broadcast, pool, read_listeners, read_process, port, identity)
+            async with background_task(scan), background_task(refresh_forever(pool, identity)):
                 yield atlas
 
     return make_asgi_app(lifespan, http=router.dispatch)
 
 
 async def serve(port: int, host: str = "127.0.0.1", *, vscode_link: bool = True) -> None:
-    """Run until cancelled, which for the CLI means until a signal stops the process."""
-    async with serving(build_app(port, vscode_link=vscode_link), host=host, port=port):
-        await sleep_forever()
+    """
+    Run until cancelled, which for the CLI means until a signal stops the process.
+
+    A lifespan that raised is reported by the ASGI plumbing as a `LifespanError` carrying the
+    message and nothing else, so it is renamed here for a caller that has no business knowing
+    which web library is under this.
+    """
+    try:
+        async with serving(build_app(port, vscode_link=vscode_link), host=host, port=port):
+            await sleep_forever()
+    except LifespanError as unstarted:
+        raise DidNotStart(str(unstarted)) from unstarted
 
 
 def serve_until_stopped(port: int, host: str = "127.0.0.1", *, vscode_link: bool = True) -> None:

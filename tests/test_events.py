@@ -10,14 +10,17 @@ from without_asgi import headers
 
 from exe_dev_atlas.app import Atlas
 from exe_dev_atlas.app import events
-from exe_dev_atlas.page import page_response
+from exe_dev_atlas.identity import Identity
+from exe_dev_atlas.reflection import Reflection
 from exe_dev_atlas.scan import Broadcast
 
 PUBLISHED = '{"rows": [{"port": 4321, "sessions": ["work"]}], "vscode_url": "vscode://open"}'
 
 
 def atlas(broadcast: Broadcast) -> Atlas:
-    return Atlas(broadcast=broadcast, page=page_response("cumulus"))
+    return Atlas(
+        broadcast=broadcast, identity=Identity(Reflection(name="cumulus", emoji="🦜"), workspace="/home/pilot")
+    )
 
 
 async def connect(broadcast: Broadcast, *, take: int) -> list[Outbound]:

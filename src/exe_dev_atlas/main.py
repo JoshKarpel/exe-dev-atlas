@@ -16,6 +16,8 @@ from typing import Final
 import typer
 
 from exe_dev_atlas import app
+from exe_dev_atlas.app import DidNotStart
+from exe_dev_atlas.install import SETTLE
 from exe_dev_atlas.install import BadSuffix
 from exe_dev_atlas.install import Converged
 from exe_dev_atlas.install import NoInterpreter
@@ -75,9 +77,20 @@ exe_dev_atlas = typer.Typer(
 
 @exe_dev_atlas.command()
 def serve(port: Port = DEFAULT_PORT, vscode_link: VsCodeLink = True) -> None:
-    """Run the atlas in the foreground, until a signal stops it."""
+    """
+    Run the atlas in the foreground, until a signal stops it.
+
+    A startup that could not read this VM's name from exe.dev's reflection integration is a
+    failure rather than a page that cannot say which box it is describing, so it is reported
+    as one line and a non-zero exit. Under the unit that is `Restart=always` trying again
+    every five seconds, and `journalctl --user -u <unit>` holds the reason.
+    """
     start_logging()
-    app.serve_until_stopped(port, vscode_link=vscode_link)
+    try:
+        app.serve_until_stopped(port, vscode_link=vscode_link)
+    except DidNotStart as unstarted:
+        typer.echo(str(unstarted), err=True)
+        raise typer.Exit(1) from None
 
 
 @exe_dev_atlas.command()
@@ -134,8 +147,13 @@ def install(
         vscode_link=vscode_link,
     )
 
+    # Said before the work rather than after it, because the watch below is most of the time
+    # this command takes and a silent pause reads as a hang.
+    typer.echo(f"converging {service}, and watching it for {SETTLE.total_seconds():.0f}s afterwards")
     converged = asyncio.run(converge(unit, systemctl_for(os.environ)))
     _report(converged)
+    if not converged.is_running:
+        raise typer.Exit(1)
 
     if not asyncio.run(is_lingering(getpass.getuser())):
         typer.echo(
@@ -159,19 +177,33 @@ def start_logging() -> None:
 
 def _report(converged: Converged) -> None:
     """
-    Say what changed about the unit, then say what is running either way.
+    Say what changed about the unit, then say what the service did about it.
 
     "Already current" is the answer about the *file* on most runs, and on its own it reads as
     "nothing happened", which is the misunderstanding the second line exists to prevent: the
     restart is the point of running this after an upgrade, and the unit text cannot show a
     change in the code it starts.
 
+    The second line is what systemd was asked rather than what it was told, so a service that
+    started and then gave up says so here instead of being reported as serving a port nothing
+    is bound to. It names what to read next, since the reason is in the journal and nowhere
+    this command can reach.
+
     Both lines name the service, because on a machine holding more than one atlas the only
     thing distinguishing this report from the other install's is which unit it is about.
     """
     unit = converged.unit
     typer.echo(f"installed {unit.path}" if converged.text_changed else f"{unit.path} is already current")
-    typer.echo(f"restarted {unit.service}, serving on port {unit.port} from {unit.executable}")
+    if converged.is_running:
+        typer.echo(f"restarted {unit.service}, serving on port {unit.port} from {unit.executable}")
+        return
+    typer.echo(
+        f"{unit.service} is {converged.state or 'unknown'} rather than running, so nothing is serving "
+        f"port {unit.port}.\n"
+        f"`journalctl --user -u {unit.service} -e` says why. A port another program already holds "
+        f"and an unanswered reflection lookup are the two usual reasons.",
+        err=True,
+    )
 
 
 def main() -> None:

@@ -12,18 +12,19 @@ import psutil
 from without_http import Client
 
 from exe_dev_atlas import zellij
+from exe_dev_atlas.identity import Identity
 from exe_dev_atlas.listeners import Listener
 from exe_dev_atlas.listeners import Process
-from exe_dev_atlas.listeners import read_process
 from exe_dev_atlas.probes import Probe
 from exe_dev_atlas.probes import Probes
-from exe_dev_atlas.reflection import Vm
 
 SCAN_INTERVAL: Final = timedelta(seconds=1)
 
-# Injected rather than imported, so a test drives a scan over a listing it wrote instead of
-# over whatever this machine happens to be running.
+# Injected rather than imported, so a test drives a scan over a machine it wrote: a listing of
+# its own, and processes behind it that no test could arrange for real. What a row says about
+# a zellij web server in particular is decided from these two answers alone.
 type ReadListeners = Callable[[], list[Listener]]
+type ReadProcess = Callable[[int | None], Process]
 
 logger = logging.getLogger(__name__)
 
@@ -131,9 +132,9 @@ async def scan_once(
     broadcast: Broadcast,
     probes: Probes,
     read_listeners: ReadListeners,
+    read_process: ReadProcess,
     own_port: int,
-    vm: Vm,
-    vscode_url: str,
+    identity: Identity,
 ) -> None:
     """Read the machine once and publish the payload, if it says anything new."""
     listeners = read_listeners()
@@ -167,13 +168,17 @@ async def scan_once(
         for index, row in enumerate(rows)
     ]
 
+    # Read here rather than passed in, because the refresh loop can have replaced them since
+    # the last scan: a renamed VM reaches every open page on the next payload. Nothing awaits
+    # between these three, and nothing but `Identity.update` writes them, so they are always
+    # the same answer rather than two halves of consecutive ones.
     await broadcast.publish(
         json.dumps(
             {
                 "own_port": own_port,
-                "vm_name": vm.name,
-                "vm_emoji": vm.emoji,
-                "vscode_url": vscode_url,
+                "vm_name": identity.vm.name,
+                "vm_emoji": identity.vm.emoji,
+                "vscode_url": identity.vscode_url,
                 "rows": listing,
             },
             sort_keys=True,
@@ -185,9 +190,9 @@ async def scan_forever(
     broadcast: Broadcast,
     client: Client,
     read_listeners: ReadListeners,
+    read_process: ReadProcess,
     own_port: int,
-    vm: Vm,
-    vscode_url: str,
+    identity: Identity,
 ) -> None:
     """
     Rescan on a fixed cadence, for as long as the server this is bound to runs.
@@ -203,7 +208,7 @@ async def scan_forever(
     try:
         while True:
             try:
-                await scan_once(broadcast, probes, read_listeners, own_port, vm, vscode_url)
+                await scan_once(broadcast, probes, read_listeners, read_process, own_port, identity)
             except psutil.Error as unreadable:
                 logger.warning(f"This scan read nothing and the last listing stands: {unreadable!r}")
             except Exception:

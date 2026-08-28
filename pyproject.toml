@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "exe-dev-atlas"
-version = "0.1.0"
+version = "0.2.0"
 description = "A front door for an exe.dev VM: what is listening, what it is, and what to open."
 readme = "README.md"
 license = "MIT"
@@ -39,6 +39,9 @@ dependencies = [
     "h11>=0.16",
     "typer>=0.27",
     "psutil>=7",
+    # One boundary uses this: reflection's document, which is the only bytes somebody else
+    # wrote that this process parses.
+    "pydantic>=2",
 ]
 
 [project.scripts]
@@ -105,6 +108,8 @@ filterwarnings = ["error"]
 [tool.mypy]
 pretty = true
 show_error_codes = true
+
+plugins = ["pydantic.mypy"]
 
 files = ["."]
 

@@ -3,8 +3,10 @@
 set ignore-comments
 
 # This checkout installs beside the atlas that holds the default unit and the default port,
-# so working on it never takes down the one the box is actually fronted by. The service name
-# is derived rather than written out twice: it is what `install` renders from the suffix.
+# so working on it never takes down the one the box is actually fronted by. The unit name is
+# spelled out rather than asked of `install`, which means it is a second copy of the prefix
+# that `install.SERVICE` owns: `just logs` against a name nothing installed prints nothing and
+# exits 0, so keep the two in step by hand.
 DEV_SUFFIX := "dev"
 DEV_PORT := "8001"
 DEV_SERVICE := "exe-dev-atlas-" + DEV_SUFFIX

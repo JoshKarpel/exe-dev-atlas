@@ -80,32 +80,31 @@ function describe(row) {
 }
 
 // What the last payload said about the VM itself, so an unchanged answer costs
-// nothing. All three of these come from reflection, read once at startup, so they
-// are fixed for the life of the connection: re-encoding the favicon SVG and
-// rebuilding the VS Code link once a second would be work for a value that
-// cannot have changed.
+// nothing, which is every answer but the first one and a rename. Re-encoding the
+// favicon SVG and rebuilding the VS Code link once a second would be work for
+// three values that almost never move.
 let identity = null;
 
 function applyIdentity(payload) {
+  // The empty payload a connection gets when it arrives before the first scan
+  // says nothing about the VM, and the shell was already rendered from the name
+  // reflection answered with at startup. Everything below would blank it out.
+  if (!payload.vm_name) return;
+
   const current = JSON.stringify([payload.vm_name, payload.vm_emoji, payload.vscode_url]);
   if (current === identity) return;
   identity = current;
 
-  // The VM's own name, which the shell already rendered, or whatever hostname got
-  // us here where reflection knew of none: through a tunnel that is `localhost`,
-  // which still tells the reader which tab is which.
-  document.title = payload.vm_name || location.hostname;
-
-  // The VM's emoji is the heading, which is what makes two of these tabs tell
-  // themselves apart at a glance. The shell's "Atlas" stands where there is no
-  // emoji to put in its place, off exe.dev or where reflection did not answer.
-  if (payload.vm_emoji) emblem.textContent = payload.vm_emoji;
-
-  // The name the VM is known by, which is what the reader is here to identify.
-  // Hidden rather than blank where reflection did not answer, so the hostname
-  // beside it does not sit behind an empty gap.
-  vm.hidden = !payload.vm_name;
+  // Both of these are in the shell already. They are written again here for the
+  // one case the shell cannot cover: a VM renamed while this page was open, which
+  // the refresh loop picks up and the next payload carries.
+  document.title = payload.vm_name;
   vm.textContent = payload.vm_name;
+
+  // Decoration beside the name, so an absent emoji leaves no gap where a glyph
+  // would have been rather than an empty box.
+  emblem.textContent = payload.vm_emoji;
+  emblem.hidden = !payload.vm_emoji;
 
   // The VM's emoji as the tab icon, drawn as SVG text so there is no image to
   // fetch or generate. dominant-baseline rather than a dy nudge, since the glyph
@@ -126,8 +125,7 @@ function applyIdentity(payload) {
       );
   }
 
-  // Absent where the link was turned off at install, and off exe.dev, where
-  // there is no <vm>.exe.xyz for Remote-SSH to reach.
+  // Absent where the link was turned off at install.
   workspaces.hidden = !payload.vscode_url;
   workspaces.innerHTML = "";
   if (payload.vscode_url) {

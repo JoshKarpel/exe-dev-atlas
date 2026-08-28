@@ -1,17 +1,27 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 ### Changed
 
-- **The page names the VM rather than the program.** The heading is the VM's emoji, the name
-  beside it is the VM's own, and the tab is titled with that name alone, so a window full of
-  these says which box each one is instead of repeating a product name the reader already
-  knows. The title is rendered into the shell rather than written by the first event, since
-  reflection answers once at startup. The hostname the browser actually reached is still in
-  the header, quieter, because through a tunnel that is `localhost` and names no VM at all. A
-  box off exe.dev, or one whose reflection lookup did not answer, keeps the "Atlas" heading
-  and is titled by that hostname.
+- **The page names the VM rather than the program.** The heading is the VM's own name, with
+  its emoji beside it, and the tab is titled with that name alone, so a window full of these
+  says which box each one is instead of repeating a product name the reader already knows.
+  Both are rendered into the shell rather than written by the first event, so a tab whose
+  stream never connects still says where it is. The emoji is marked as decoration rather than
+  read out as the page's heading, and a VM that has none renders none instead of a gap. The
+  hostname the browser actually reached is still in the header, quieter, because through a
+  tunnel that is `localhost` and names no VM at all.
+
+- **The VM's name is a requirement, not a decoration.** exe.dev's reflection integration is
+  read before the server binds anything, and `exe-dev-atlas` now refuses to start if it does
+  not answer: everything the page says about which box you are looking at is that one lookup,
+  and a heading that has given up on naming the box is worse than a unit that says it could
+  not start. Under `systemd` that is `Restart=always` trying again every five seconds, with
+  the reason in the journal, rather than a silently unnamed page. It is read again every few
+  minutes, so a VM renamed under a running server re-titles its own page and re-points its
+  Remote-SSH link without a restart, and only an answer ever replaces the name: a lookup that
+  fails leaves the last good one standing.
 
 ### Removed
 
@@ -37,9 +47,8 @@
 - **A way to turn the VS Code link off.** `serve` and `install` both take
   `--vs-code-link/--no-vs-code-link`, default on, and an install renders whichever was asked
   for into the unit's `ExecStart`, so the unit states the choice rather than inheriting the
-  command's default. With the link off the payload carries an empty `vscode_url`, which is
-  already how a VM whose reflection lookup did not answer says there is no link to offer, so
-  the header renders the same either way.
+  command's default. With the link off the payload carries an empty `vscode_url`, and the nav
+  that would have held the link is left out of the layout rather than laid out empty.
 
 - **More than one atlas on a machine.** `install --systemd-unit-suffix dev` converges
   `exe-dev-atlas-dev` rather than `exe-dev-atlas`, so a checkout can be installed and
@@ -50,6 +59,15 @@
   into a path under `~/.config/systemd/user`. Each install needs its own `--port`, since
   nothing stops two units from being told to bind the same one. A unit's `Description` now
   names the port it serves, so `systemctl --user list-units` tells two of them apart.
+
+### Fixed
+
+- **`install` no longer reports a service that never started as running.** The unit is
+  `Type=exec`, so `systemctl restart` returns once the process has been launched rather than
+  once it has bound anything, and an install that reported from that alone said "serving on
+  port 8000" over a process that had already exited because something else held the port. It
+  now waits, asks systemd for the unit's `ActiveState`, and either names the port or names the
+  state it found and exits non-zero, pointing at the journal for the reason.
 
 ## 0.1.0
 
