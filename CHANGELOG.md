@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0
+
+### Added
+
+- **The header shows the VM's resource usage.** CPU, memory, and the root filesystem, each as
+  a live percentage and as an amount in use of the total (`3.7 / 7.7 GiB`, `0.6 / 2 cores`),
+  with a bar that turns orange past 90%. CPU is measured
+  over the last second rather than since boot, and memory counts reclaimable cache as free,
+  so a box that has only been reading files does not look full.
+
 ## 0.2.0
 
 ### Changed

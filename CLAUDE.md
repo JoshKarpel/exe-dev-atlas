@@ -9,7 +9,8 @@ $ just setup            # uv sync + install pre-commit as a git hook
 $ just test             # mypy, then pytest
 $ just test tests/test_scan.py::test_name   # extra args go straight to pytest
 $ just check            # pre-commit over all files, then mypy
-$ just serve --port 8123  # foreground, on a non-default port
+$ just serve            # foreground on 8123 (SERVE_PORT), restarting when src/ changes
+$ just serve 8437       # the same, on whatever port is passed
 $ just install          # this checkout as exe-dev-atlas-dev on port 8001
 $ just logs             # journalctl --user -u exe-dev-atlas-dev -f
 $ just screenshot       # regenerate the README's images from this machine
@@ -94,8 +95,22 @@ first two are synchronous inside an async loop on purpose: both are `/proc` read
 formatting with no device behind it to block on, and at a few milliseconds once a second
 `asyncio.to_thread` would cost more in dispatch than the reads take. It serializes one JSON
 payload and hands it to `Broadcast.publish`, which only bumps its version when the payload
-differs from the last, so a quiet box pushes nothing. Serializing there rather than in the
-handler is what makes the cost one per scan however many connections are held.
+differs from the last, so nothing is pushed that the page would not show. Serializing there
+rather than in the handler is what makes the cost one per scan however many connections are
+held.
+
+The payload also carries the VM's resource usage (`resources.Usage`): CPU, memory, and the
+root filesystem, as whole percentages and as sizes in use beside their totals. Every figure is
+rounded to what the page draws (a size in use to `GRAIN`, a tenth of a GiB), because the
+payload diff is what decides there is news, and memory in use measured to the MiB moves every
+second on an idle box. CPU still moves most seconds on a box doing anything, so
+a push most seconds is the normal case now, not a quiet box pushing nothing; what keeps that
+cheap is `atlas.js` updating fields in place. CPU is a busy share *between two readings* of
+the kernel's counters, so `scan_forever` holds the previous `CpuTimes` as a loop local and
+hands `scan_once` a finished `Usage` value rather than another reader: only the loop has both
+readings. The first scan's CPU is `None` rather than `0`, since it is measured over
+microseconds in which the counters have not moved. `Usage.as_dict` names its fields for the
+same reason `Row.as_dict` does, and is pinned the same way.
 
 `scan_forever` is the cadence around it, and it must **not** die on a bad scan: nothing
 watches this task, so a page holding the last payload keeps its heartbeated connection and
@@ -242,8 +257,8 @@ service manager.
 ### Functional core
 
 `group_listeners`, `build_row`, `Row.as_dict`, `Unit.text`, `service_name`, `is_zellij_web`,
-`format_probe_title`, `probe_address`, `probe_url`, `parse_reflection`, `vscode_url`, and
-`page.shell` are pure and tested directly. The I/O shell around them is thin: `processes.run`
+`format_probe_title`, `probe_address`, `probe_url`, `parse_reflection`, `vscode_url`,
+`cpu_percent`, `to_grain`, `Usage.as_dict`, and `page.shell` are pure and tested directly. The I/O shell around them is thin: `processes.run`
 returns a `Ran` value (a timeout and a cancellation both kill the child; a timeout is an
 outcome rather than an exception, and `.checked()` is the loud version), and process reads
 return empty values that every caller is written to treat as an honest "no answer". Reflection
@@ -319,6 +334,6 @@ rendering lives, and three things here price it:
   controls on any element, would go unused, leaving it a DOM-patching library over a stream.
 
 Polling (`hx-trigger="every 1s"`, or an SSE event as a doorbell for an `hx-get`) is worse
-still: `Broadcast` suppresses a push when the pair is unchanged, so a quiet box currently
-sends nothing, and either polling form costs a request and a full re-render per client per
-second regardless.
+still: `Broadcast` suppresses a push when the pair is unchanged, so a second in which nothing
+the page shows moved sends nothing, and either polling form costs a request and a full
+re-render per client per second regardless.

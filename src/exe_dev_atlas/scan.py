@@ -17,6 +17,9 @@ from exe_dev_atlas.listeners import Listener
 from exe_dev_atlas.listeners import Process
 from exe_dev_atlas.probes import Probe
 from exe_dev_atlas.probes import Probes
+from exe_dev_atlas.resources import Usage
+from exe_dev_atlas.resources import read_cpu_times
+from exe_dev_atlas.resources import read_usage
 
 SCAN_INTERVAL: Final = timedelta(seconds=1)
 
@@ -135,8 +138,14 @@ async def scan_once(
     read_process: ReadProcess,
     own_port: int,
     identity: Identity,
+    usage: Usage,
 ) -> None:
-    """Read the machine once and publish the payload, if it says anything new."""
+    """
+    Read the machine once and publish the payload, if it says anything new.
+
+    `usage` arrives as a value rather than as another reader, because CPU is measured between
+    two readings and only the loop around this holds the earlier one.
+    """
     listeners = read_listeners()
     probes.refresh(listeners)
 
@@ -180,6 +189,7 @@ async def scan_once(
                 "vm_emoji": identity.vm.emoji,
                 "vscode_url": identity.vscode_url,
                 "rows": listing,
+                "usage": usage.as_dict(),
             },
             sort_keys=True,
         )
@@ -203,12 +213,17 @@ async def scan_forever(
     payload it was sent, the heartbeat keeps its connection open, and it reads "live" over a
     listing that stopped moving. An unexpected failure still ends the scan, but says so on the
     way out, because `background_task` surfaces it only when the server itself shuts down.
+
+    Each scan's CPU figure is measured from the reading the scan before it ended on, so it is
+    how busy the machine was over the last interval rather than since boot.
     """
     probes = Probes(client)
+    cpu = read_cpu_times()
     try:
         while True:
             try:
-                await scan_once(broadcast, probes, read_listeners, read_process, own_port, identity)
+                usage, cpu = read_usage(cpu)
+                await scan_once(broadcast, probes, read_listeners, read_process, own_port, identity, usage)
             except psutil.Error as unreadable:
                 logger.warning(f"This scan read nothing and the last listing stands: {unreadable!r}")
             except Exception:

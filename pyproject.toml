@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "exe-dev-atlas"
-version = "0.2.0"
+version = "0.3.0"
 description = "A port explorer for an exe.dev VM: which ports are bound, what process bound them, and links to access them, as a web page served from the VM itself."
 readme = "README.md"
 license = "MIT"
@@ -85,6 +85,7 @@ dev = [
     "ruff>=0.15.22",
     "pre-commit>=4.4",
     "types-psutil>=7.2.2.20260518",
+    "watchfiles>=1",
 ]
 
 [tool.pytest.ini_options]
