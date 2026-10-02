@@ -3,7 +3,7 @@
 # Everything that varies arrives over SSE and is written into this skeleton by the browser, so
 # the shell is a constant: rendered once at startup and served from that value. What is here
 # is only what the page needs before its first event, which is the element ids the script
-# looks up and the two asset links.
+# looks up (the resource gauges among them) and the two asset links.
 
 from __future__ import annotations
 
@@ -12,7 +12,9 @@ from typing import Final
 from without_asgi import Response
 from without_asgi import html_content
 from without_html import DOCTYPE
+from without_html import Element
 from without_html import body
+from without_html import div
 from without_html import footer
 from without_html import h1
 from without_html import head
@@ -26,6 +28,7 @@ from without_html import nav
 from without_html import p
 from without_html import render
 from without_html import script
+from without_html import section
 from without_html import span
 from without_html import title
 from without_html import ul
@@ -91,6 +94,12 @@ def shell(vm: Reflection) -> str:
                                         span(attrs={"id": "state"}, children="connecting"),
                                     ]
                                 ),
+                                # Hidden until a payload carries figures, since the empty
+                                # one a connection can get before the first scan has none.
+                                section(
+                                    attrs={"id": "usage", "aria-label": "Resource usage", "hidden": True},
+                                    children=[gauge("cpu"), gauge("memory"), gauge("disk")],
+                                ),
                                 nav(attrs={"id": "workspaces", "hidden": True}),
                                 ul(attrs={"id": "ports"}),
                                 p(
@@ -115,6 +124,25 @@ def shell(vm: Reflection) -> str:
                 ],
             ),
         ]
+    )
+
+
+def gauge(name: str) -> Element:
+    """
+    One resource's slot, named by its id, for the script to fill from each payload.
+
+    The bar repeats the percentage beside it, so it is kept out of the accessibility tree
+    rather than announced as a second reading of the same number.
+    """
+    return div(
+        cls="gauge",
+        attrs={"id": name},
+        children=[
+            span(cls="label", children=name),
+            span(cls="bar", attrs={"aria-hidden": "true"}, children=span(cls="fill")),
+            span(cls="value"),
+            span(cls="detail"),
+        ],
     )
 
 

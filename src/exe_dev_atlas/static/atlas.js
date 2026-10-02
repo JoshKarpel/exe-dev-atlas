@@ -5,6 +5,10 @@ const workspaces = document.getElementById("workspaces");
 const favicon = document.getElementById("favicon");
 const emblem = document.getElementById("emblem");
 const vm = document.getElementById("vm");
+const usage = document.getElementById("usage");
+const cpu = document.getElementById("cpu");
+const memory = document.getElementById("memory");
+const disk = document.getElementById("disk");
 document.getElementById("host").textContent = location.hostname;
 
 // The digits that open a link, which bounds how many rows can carry one. The
@@ -140,11 +144,57 @@ function applyIdentity(payload) {
   }
 }
 
+// Used and total in the unit the total reads best in, so the two compare at a
+// glance. Binary units, which is what `free -h` and `df -h` print (`df` rounds
+// up where this rounds to nearest). A tenth of a unit below ten, whole above,
+// which is also the finest the server sends a size in use at.
+function sizes(used, total) {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let unit = 0;
+  let scale = 1;
+  while (total / scale >= 1024 && unit < units.length - 1) {
+    scale *= 1024;
+    unit++;
+  }
+  const digits = total / scale < 10 ? 1 : 0;
+  return (used / scale).toFixed(digits) + " / " + (total / scale).toFixed(digits) + " " + units[unit];
+}
+
+function cores(percent, count) {
+  if (!count) return "";
+  const noun = count === 1 ? " core" : " cores";
+  if (percent === null) return count + noun;
+  return ((percent / 100) * count).toFixed(1) + " / " + count + noun;
+}
+
+// Where a gauge stops reading as a level and starts reading as a warning.
+const CROWDED = 90;
+
+// A null percent is a CPU figure with nothing yet to measure it over, which is
+// the first scan. Drawn as an empty bar rather than as 0%, which would be a claim.
+function showGauge(gauge, percent, detail) {
+  const known = percent !== null;
+  gauge.querySelector(".fill").style.width = (known ? percent : 0) + "%";
+  gauge.querySelector(".value").textContent = known ? percent + "%" : "…";
+  gauge.querySelector(".detail").textContent = detail;
+  gauge.classList.toggle("crowded", known && percent >= CROWDED);
+}
+
+function applyUsage(figures) {
+  // Absent from the empty payload a connection can get before the first scan.
+  usage.hidden = !figures;
+  if (!figures) return;
+  showGauge(cpu, figures.cpu_percent, cores(figures.cpu_percent, figures.cpu_count));
+  showGauge(memory, figures.memory_percent, sizes(figures.memory_used, figures.memory_total));
+  showGauge(disk, figures.disk_percent, sizes(figures.disk_used, figures.disk_total));
+}
+
 function render(payload) {
   const rows = payload.rows || [];
   empty.hidden = rows.length > 0;
 
   applyIdentity(payload);
+  applyUsage(payload.usage);
   openable = [];
 
   // Stale rows go first, so the position check below compares against a list holding

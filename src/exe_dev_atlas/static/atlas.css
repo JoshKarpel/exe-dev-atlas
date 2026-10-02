@@ -2,6 +2,7 @@
   color-scheme: light dark;
   --bg: #fbfbfa; --card: #ffffff; --line: #e4e2dd; --ink: #1c1b19;
   --dim: #6d6a63; --accent: #2f6f4f; --badge: #ecebe7; --flash: #fff6d8;
+  --warn: #c2622f;
   --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 @media (prefers-color-scheme: dark) {
@@ -37,7 +38,28 @@ h1 { font-size: 1.2rem; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 }
 .workspace:hover { border-color: var(--accent); }
 #state { margin-left: auto; font-size: .78rem; color: var(--dim); }
-#state.stale { color: #c2622f; }
+#state.stale { color: var(--warn); }
+/* Scoped to being shown, for the same reason as `#workspaces` below. */
+#usage:not([hidden]) {
+  display: flex; flex-wrap: wrap; gap: .4rem 1.6rem; margin-bottom: .9rem;
+}
+.gauge {
+  display: flex; align-items: center; gap: .5rem;
+  font-family: var(--mono); font-size: .76rem; color: var(--dim);
+}
+.gauge .label { font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; }
+.gauge .bar {
+  width: 5rem; height: .4rem; background: var(--badge); border-radius: 3px; overflow: hidden;
+}
+.gauge .fill { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s ease; }
+/* Fixed width and tabular digits, so a figure going from 9% to 10% does not shove the
+   detail and every gauge after it sideways once a second. */
+.gauge .value {
+  min-width: 2.2rem; text-align: right; color: var(--ink); font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.gauge.crowded .fill { background: var(--warn); }
+.gauge.crowded .value { color: var(--warn); }
 ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
 li {
   background: var(--card); border: 1px solid var(--line); border-radius: 10px;

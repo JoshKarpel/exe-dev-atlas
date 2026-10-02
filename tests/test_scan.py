@@ -16,6 +16,7 @@ from exe_dev_atlas.listeners import Listener
 from exe_dev_atlas.listeners import Process
 from exe_dev_atlas.probes import Probes
 from exe_dev_atlas.reflection import Reflection
+from exe_dev_atlas.resources import Usage
 from exe_dev_atlas.scan import Broadcast
 from exe_dev_atlas.scan import ReadListeners
 from exe_dev_atlas.scan import ReadProcess
@@ -28,6 +29,16 @@ WORKSPACE = "/home/pilot"
 VSCODE_URL = f"vscode://vscode-remote/ssh-remote+parrot.exe.xyz{WORKSPACE}?windowId=_blank"
 IDENTITY = Identity(VM, workspace=WORKSPACE)
 OWN_PORT = 8123
+USAGE = Usage(
+    cpu_percent=37,
+    cpu_count=4,
+    memory_percent=62,
+    memory_used=5_153_960_736,
+    memory_total=8_320_557_056,
+    disk_percent=88,
+    disk_used=44_023_414_784,
+    disk_total=53_660_876_800,
+)
 
 FIRST = '{"rows": [{"port": 4321, "sessions": ["work"]}]}'
 SECOND = '{"rows": [{"port": 8765, "sessions": ["notes"]}]}'
@@ -137,7 +148,7 @@ async def scanned(pool: ConnectionPool, read_listeners: ReadListeners, read_proc
     broadcast = Broadcast()
     probes = Probes(pool)
     try:
-        await scan_once(broadcast, probes, read_listeners, read_process, OWN_PORT, IDENTITY)
+        await scan_once(broadcast, probes, read_listeners, read_process, OWN_PORT, IDENTITY, USAGE)
     finally:
         await probes.aclose()
 
@@ -224,3 +235,15 @@ async def test_the_vscode_link_is_published_to_every_connection(pool: Connection
     published = json.loads(await scanned(pool, listing(), nothing_readable))
 
     assert published["vscode_url"] == VSCODE_URL
+
+
+async def test_a_scan_publishes_the_resource_usage_it_was_handed(pool: ConnectionPool) -> None:
+    published = json.loads(await scanned(pool, listing(), nothing_readable))
+
+    assert published["usage"] == USAGE.as_dict()
+
+
+def test_every_field_of_the_usage_reaches_the_browser() -> None:
+    # The same hand-written field list as a row's, failing the same silent way: `atlas.js`
+    # reads every figure unguarded.
+    assert set(USAGE.as_dict()) == {field.name for field in fields(Usage)}

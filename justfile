@@ -11,6 +11,9 @@ DEV_SUFFIX := "dev"
 DEV_PORT := "8001"
 DEV_SERVICE := "exe-dev-atlas-" + DEV_SUFFIX
 
+# Off both ports above, so a foreground atlas runs beside the box's own and the dev unit.
+SERVE_PORT := "8123"
+
 [default]
 [doc('List available recipes')]
 list:
@@ -35,9 +38,11 @@ check:
     uv run pre-commit run --all-files
     uv run mypy
 
-[doc('Run the atlas in the foreground')]
-serve *args:
-    uv run exe-dev-atlas serve {{ args }}
+# Watching all of `src` rather than only its Python: `static/` is inventoried once at startup,
+# so a stylesheet or script edit needs a restart to be served at all.
+[doc('Run the atlas in the foreground, restarting on code changes, on a port of its own unless given one')]
+serve port=SERVE_PORT *args:
+    exec uv run watchfiles --target-type command 'exe-dev-atlas serve --port {{ port }} {{ args }}' src
 
 [doc('Install this checkout as the dev atlas, beside whatever holds the default unit')]
 install *args:

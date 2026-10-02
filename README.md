@@ -27,7 +27,8 @@ instead of needing to remember and type the ports by hand.
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/JoshKarpel/exe-dev-atlas/main/docs/screenshot-dark.png">
   <img alt="One row per listening process, each carrying the port, the title the port served,
-  the working directory, the command line, and the uptime, under a VS Code link"
+  the working directory, the command line, and the uptime, under CPU, memory, and disk gauges
+  and a VS Code link"
   src="https://raw.githubusercontent.com/JoshKarpel/exe-dev-atlas/main/docs/screenshot-light.png">
 </picture>
 
@@ -74,6 +75,15 @@ as they were before, and the atlas is a reason to read them carefully:
 ## Beyond Port Exploration
 
 `exe-dev-atlas` does a few things beyond generic port exploration.
+
+### Resource usage
+
+The header shows how much of the VM is in use right now:
+CPU across every core, memory, and the root filesystem,
+each as a percentage and as how much is in use of how much there is.
+Memory counts reclaimable page cache as free, the way `free`'s `available` column does,
+and disk counts what an unprivileged user can fill, the way `df` does.
+There is no history, only the current values, updated live with everything else.
 
 ### VS Code
 
