@@ -7,6 +7,9 @@ from without_asgi import headers
 
 from exe_dev_atlas.app import STATIC_ROOT
 from exe_dev_atlas.listeners import ROUTED_PORTS
+from exe_dev_atlas.manifest import MANIFEST_URL
+from exe_dev_atlas.page import DARK_BACKGROUND
+from exe_dev_atlas.page import LIGHT_BACKGROUND
 from exe_dev_atlas.page import SCRIPT_URL
 from exe_dev_atlas.page import STYLESHEET_URL
 from exe_dev_atlas.page import page_response
@@ -57,6 +60,30 @@ def test_the_shell_links_the_stylesheet_and_the_script() -> None:
 
     assert f'href="{STYLESHEET_URL}"' in rendered
     assert f'src="{SCRIPT_URL}"' in rendered
+
+
+def test_the_shell_links_the_manifest_with_the_cookies_the_proxy_asks_for() -> None:
+    # Without `use-credentials` the browser fetches the manifest with no cookies at all, which
+    # behind a private VM's login is an unauthenticated request for it.
+    assert f'<link rel="manifest" href="{MANIFEST_URL}" crossorigin="use-credentials">' in shell(VM)
+
+
+@pytest.mark.parametrize(
+    ("scheme", "colour"),
+    [("light", LIGHT_BACKGROUND), ("dark", DARK_BACKGROUND)],
+)
+def test_the_title_bar_colour_is_the_stylesheet_background_for_each_scheme(scheme: str, colour: str) -> None:
+    # A `<meta>` cannot read a custom property, so the colour is repeated in page.py and
+    # pinned here to the stylesheet's own `--bg` in that scheme. The light palette is the
+    # stylesheet's first `--bg`, and the dark one the first inside the dark media query.
+    light, _, dark = STYLESHEET_SOURCE.partition("@media (prefers-color-scheme: dark)")
+    source = {"light": light, "dark": dark}[scheme]
+    declared = re.search(r"--bg:\s*(#[0-9a-fA-F]+)", source)
+    assert declared
+    assert declared.group(1) == colour
+
+    media = f"(prefers-color-scheme: {scheme})"
+    assert f'<meta name="theme-color" media="{media}" content="{colour}">' in shell(VM)
 
 
 def test_the_script_is_deferred_so_it_runs_after_the_skeleton_exists() -> None:

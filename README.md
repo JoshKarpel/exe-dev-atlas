@@ -100,6 +100,21 @@ Both commands take `--vs-code-link/--no-vs-code-link`,
 and `install` records whichever you asked for in the unit,
 so you must pass it each time you call `install`.
 
+### Installing the page as an app
+
+The page is a [progressive web app](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps),
+so a browser that installs those (Chrome, Edge, Safari on macOS and iOS) can give each VM's
+atlas a window and a launcher entry of its own,
+named for the VM and drawn with its emoji (or its initial, if it has none).
+Use the browser's own install control,
+such as the install icon in Chrome's address bar or Share → Add to Home Screen on iOS.
+
+It does nothing offline.
+The atlas is a live view of the machine,
+so with the VM unreachable you get the browser's own error rather than a stale listing.
+iOS draws home screen icons from PNGs only,
+so there the icon is whatever iOS falls back to rather than the emoji.
+
 ### Zellij
 
 `exe-dev-atlas` has specialized support for [Zellij's](https://zellij.dev/documentation/introduction.html)
