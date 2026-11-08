@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **The page installs as an app.** It serves a web app manifest named for the VM, with the
+  VM's emoji (or its initial) as the icon, so Chrome, Edge, and Safari can install each VM's
+  atlas as a window of its own. The installed app follows a rename like the tab does. There is
+  no offline mode: an unreachable VM shows the browser's error, not a stale listing.
+
 ## 0.3.0
 
 ### Added

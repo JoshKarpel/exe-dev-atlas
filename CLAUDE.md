@@ -159,8 +159,9 @@ message and exits 1. Whatever is not in the `ReflectionFailed` message is not in
 either.
 
 `identity.Identity` is the one mutable place in the program, and everything reflection feeds
-is rebuilt together in `update`: the page `Response` (its `<title>` and heading), and the
-Remote-SSH URL (which names the VM as an SSH host). `refresh_forever` writes there on success
+is rebuilt together in `update`: the page `Response` (its `<title>` and heading), the web app
+manifest `Response` (the installed app's name and icon), and the Remote-SSH URL (which names
+the VM as an SSH host). `refresh_forever` writes there on success
 only, so a failed re-read leaves the last good answer standing rather than blanking a heading
 that was correct. `scan_once` reads the three payload fields off it with no `await` between
 them, which is what makes a rename atomic from a reader's side. Adding anything else derived
@@ -258,7 +259,7 @@ service manager.
 
 `group_listeners`, `build_row`, `Row.as_dict`, `Unit.text`, `service_name`, `is_zellij_web`,
 `format_probe_title`, `probe_address`, `probe_url`, `parse_reflection`, `vscode_url`,
-`cpu_percent`, `to_grain`, `Usage.as_dict`, and `page.shell` are pure and tested directly. The I/O shell around them is thin: `processes.run`
+`cpu_percent`, `to_grain`, `Usage.as_dict`, `manifest.manifest`, `icon_uri`, and `page.shell` are pure and tested directly. The I/O shell around them is thin: `processes.run`
 returns a `Ran` value (a timeout and a cancellation both kill the child; a timeout is an
 outcome rather than an exception, and `.checked()` is the loud version), and process reads
 return empty values that every caller is written to treat as an honest "no answer". Reflection
@@ -290,11 +291,23 @@ carries an empty list, and that is exactly the row the link is there for. So `sc
 keep emitting the key for every session server, empty tuple included.
 
 `page.py` server-renders a shell that is constant until the VM is renamed: the element ids the
-script looks up, two asset links, and the VM's name in both `<title>` and `#vm`. It is not
+script looks up, two asset links, the manifest link, and the VM's name in both `<title>` and `#vm`. It is not
 per-request, so it is rendered once into a `Response` and served from that value; a rename
 replaces the whole `Response` rather than editing one. `app.build_router` serves `static/` from
 an `inventory` walked once at startup, so nothing may write into that directory while the
 process runs.
+
+`manifest.py` is what makes the page installable, and it is the shell's sibling: rendered per
+reflection answer, held on `Identity`, served from that value. Two choices in it rest on probes
+against Chromium rather than on docs. The `<link rel="manifest">` carries
+`crossorigin="use-credentials"` because without it the manifest request carries no cookie at
+all, and a private VM sits behind exe.dev's login. What the proxy answers a cookieless request
+with has not been probed (the VM cannot reach its own public hostname), so treat the attribute
+as the fix for a request that would otherwise go unauthenticated, not for an observed redirect.
+The icon is an SVG data URI declared `sizes: any`, which satisfies Chrome's 192px and 512px
+requirement, inlined so the browser has no icon to fetch past that same login. There is deliberately no service worker:
+Chrome does not require one to install, and anything a worker served offline would be a listing
+reading as current about a box nobody can reach.
 
 The header is the VM's identity. `#vm` is the document's only `h1` and holds the name, because
 that is what the reader is here to identify and what a screen reader should announce as the

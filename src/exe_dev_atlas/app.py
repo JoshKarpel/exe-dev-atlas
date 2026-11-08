@@ -1,5 +1,5 @@
 # The composition root: what is constructed once, what is held for the process's life, and
-# how the three routes reach it.
+# how the four routes reach it.
 
 from __future__ import annotations
 
@@ -37,6 +37,7 @@ from exe_dev_atlas.identity import refresh_forever
 from exe_dev_atlas.listeners import home_directory
 from exe_dev_atlas.listeners import read_listeners
 from exe_dev_atlas.listeners import read_process
+from exe_dev_atlas.manifest import MANIFEST_URL
 from exe_dev_atlas.scan import Broadcast
 from exe_dev_atlas.scan import scan_forever
 
@@ -101,9 +102,14 @@ async def index(atlas: Atlas) -> Response:
     return atlas.identity.page
 
 
+async def web_app_manifest(atlas: Atlas) -> Response:
+    """The manifest named for the VM's current name, which a rename replaces with the shell."""
+    return atlas.identity.manifest
+
+
 def build_router() -> Router[Atlas]:
     """
-    The three routes, over an inventory of the static tree walked once, here.
+    The four routes, over an inventory of the static tree walked once, here.
 
     `inventory` is not a directory mount: it walks the tree at this call and answers every
     later request out of the resulting mapping, so a request never contributes a filesystem
@@ -114,6 +120,7 @@ def build_router() -> Router[Atlas]:
     return Router(
         routes=(
             get("/")(index),
+            get(MANIFEST_URL)(web_app_manifest),
             static_files(STATIC_PREFIX, assets),
             get("/events")(events),
         ),

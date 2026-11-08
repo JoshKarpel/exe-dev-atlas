@@ -3,7 +3,7 @@
 # Everything that varies arrives over SSE and is written into this skeleton by the browser, so
 # the shell is a constant: rendered once at startup and served from that value. What is here
 # is only what the page needs before its first event, which is the element ids the script
-# looks up (the resource gauges among them) and the two asset links.
+# looks up (the resource gauges among them), the two asset links, and the manifest link.
 
 from __future__ import annotations
 
@@ -34,10 +34,16 @@ from without_html import title
 from without_html import ul
 
 from exe_dev_atlas.listeners import ROUTED_PORTS
+from exe_dev_atlas.manifest import MANIFEST_URL
 from exe_dev_atlas.reflection import Reflection
 
 STYLESHEET_URL: Final = "/static/atlas.css"
 SCRIPT_URL: Final = "/static/atlas.js"
+
+# The stylesheet's `--bg` in each scheme, repeated because a `<meta>` cannot read a custom
+# property. A test pins the two together.
+LIGHT_BACKGROUND: Final = "#fbfbfa"
+DARK_BACKGROUND: Final = "#16171a"
 
 
 def shell(vm: Reflection) -> str:
@@ -62,6 +68,32 @@ def shell(vm: Reflection) -> str:
                             # An empty data URI, so the browser does not go asking for
                             # /favicon.ico before the VM's emoji arrives to replace it.
                             link(attrs={"id": "favicon", "rel": "icon", "href": "data:,"}),
+                            # `use-credentials` because without it the manifest is fetched
+                            # with no cookies at all, which behind exe.dev's login is a
+                            # request the proxy has no reason to let through.
+                            link(
+                                attrs={
+                                    "rel": "manifest",
+                                    "href": MANIFEST_URL,
+                                    "crossorigin": "use-credentials",
+                                }
+                            ),
+                            # The installed app's title bar, in the stylesheet's `--bg` for
+                            # each colour scheme, so the window's frame matches the page.
+                            meta(
+                                attrs={
+                                    "name": "theme-color",
+                                    "media": "(prefers-color-scheme: light)",
+                                    "content": LIGHT_BACKGROUND,
+                                }
+                            ),
+                            meta(
+                                attrs={
+                                    "name": "theme-color",
+                                    "media": "(prefers-color-scheme: dark)",
+                                    "content": DARK_BACKGROUND,
+                                }
+                            ),
                             link(attrs={"rel": "stylesheet", "href": STYLESHEET_URL}),
                             # `defer` rather than placing the script last in the body: it
                             # runs after parsing either way, and the head is where the

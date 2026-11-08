@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import timedelta
 
@@ -37,6 +38,7 @@ class TestIdentity:
 
         assert identity.vm == RENAMED
         assert b"<title>nimbus</title>" in identity.page.body
+        assert json.loads(identity.manifest.body)["name"] == "nimbus"
         assert "nimbus.exe.xyz" in identity.vscode_url
 
     def test_an_atlas_installed_without_the_link_offers_no_url_at_all(self) -> None:

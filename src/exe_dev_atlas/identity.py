@@ -18,6 +18,7 @@ from datetime import timedelta
 
 from without_asgi import Response
 
+from exe_dev_atlas.manifest import manifest_response
 from exe_dev_atlas.page import page_response
 from exe_dev_atlas.reflection import REFLECTION_INTERVAL
 from exe_dev_atlas.reflection import Reflection
@@ -46,6 +47,7 @@ class Identity:
     vm: Reflection
     workspace: str | None
     page: Response = field(init=False)
+    manifest: Response = field(init=False)
     vscode_url: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -55,6 +57,7 @@ class Identity:
         """Take `vm` as what this box is now, rebuilding everything that says so."""
         self.vm = vm
         self.page = page_response(vm)
+        self.manifest = manifest_response(vm)
         self.vscode_url = "" if self.workspace is None else vscode_url(vm.name, self.workspace)
 
 
